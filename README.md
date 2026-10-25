@@ -18,6 +18,16 @@ va Claude qaysi timeframe'da kirishni, Entry / Stop Loss / Take Profit'ni tavsiy
 Kalitni serverda saqlash uchun: `ANTHROPIC_API_KEY=sk-ant-... npm start` (unda saytda kiritish shart emas).
 Modelni o'zgartirish: `CLAUDE_MODEL=claude-sonnet-5-5 npm start` (arzonroq va tezroq). Standart: `claude-opus-5-5`.
 
+## Render'ga joylash
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Temurbek1998/xaubek)
+
+Tugmani bosing, Render hisobingizga kiring va "Apply" ni bosing. `render.yaml` hamma sozlamani o'zi qiladi.
+Bepul tarifda sayt 15 daqiqa ishlatilmasa uxlab qoladi, keyingi ochilishda ~30–60 soniya kutiladi.
+
+⚠️ Sayt hammaga ochiq bo'lgani uchun Render'da `ANTHROPIC_API_KEY` o'rnatmang, aks holda har qanday tashrif buyuruvchi
+sizning hisobingizdan foydalana oladi. Har kim kalitini saytning o'zida kiritadi.
+
 ## Foydalanish
 
 - TradingView'da grafik ustida **Alt+S** (skrinshotni nusxalash), so'ng saytda **Ctrl+V**. Yoki fayllarni tashlang.

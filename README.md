@@ -13,20 +13,33 @@ va Claude qaysi timeframe'da kirishni, Entry / Stop Loss / Take Profit'ni tavsiy
    npm start
    ```
 3. Brauzerda oching: http://localhost:3000
-4. Claude API kalitingizni kiriting (https://console.anthropic.com/settings/keys).
-
-Kalitni serverda saqlash uchun: `ANTHROPIC_API_KEY=sk-ant-... npm start` (unda saytda kiritish shart emas).
+4. API kalit va parol muhit o'zgaruvchilari orqali beriladi (pastdagi "Admin panel" bo'limiga qarang).
 Modelni o'zgartirish: `CLAUDE_MODEL=claude-sonnet-5-5 npm start` (arzonroq va tezroq). Standart: `claude-opus-5-5`.
 
 ## Render'ga joylash
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Temurbek1998/xaubek)
 
-Tugmani bosing, Render hisobingizga kiring va "Apply" ni bosing. `render.yaml` hamma sozlamani o'zi qiladi.
+1. Tugmani bosing va Render'ga GitHub orqali kiring.
+2. Render ikkita qiymat so'raydi:
+   - `ANTHROPIC_API_KEY` — Claude API kalitingiz (https://console.anthropic.com/settings/keys)
+   - `ADMIN_PASSWORD` — admin panelga kirish paroli (o'zingiz o'ylab toping, kamida 12 belgi)
+3. "Apply" ni bosing. `SESSION_SECRET` avtomatik yaratiladi.
+
 Bepul tarifda sayt 15 daqiqa ishlatilmasa uxlab qoladi, keyingi ochilishda ~30–60 soniya kutiladi.
 
-⚠️ Sayt hammaga ochiq bo'lgani uchun Render'da `ANTHROPIC_API_KEY` o'rnatmang, aks holda har qanday tashrif buyuruvchi
-sizning hisobingizdan foydalana oladi. Har kim kalitini saytning o'zida kiritadi.
+## Admin panel
+
+Foydalanuvchi akkauntlari yo'q: saytga faqat `ADMIN_PASSWORD` bilan kiriladi (sessiya 30 kun saqlanadi).
+API kalit faqat serverda turadi va brauzerga hech qachon yuborilmaydi. 5 marta noto'g'ri parol kiritilsa, 5 daqiqaga bloklanadi.
+
+- **📈 Tahlil** — skrinshotlar, strategiyalar, chizilgan reja.
+- **💬 AI chat** — Claude bilan to'g'ridan-to'g'ri suhbat: tahlil bo'yicha savollar, rasm yuborish (Ctrl+V),
+  oxirgi tahlil natijasini suhbatga qo'shish.
+- **📒 Aniqlik jurnali** — TP/SL natijalari va har bir strategiyaning win rate'i.
+
+Lokal ishga tushirish: `ANTHROPIC_API_KEY=sk-ant-... ADMIN_PASSWORD=parol npm start`
+(`ADMIN_PASSWORD` berilmasa, sayt parolsiz ochiladi — faqat o'z kompyuteringizda shunday qiling).
 
 ## Foydalanish
 

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="uz" data-theme="tv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XAU Smart Trade — Kirish</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script>try { document.documentElement.dataset.theme = localStorage.getItem("xau_theme") || "tv"; } catch {}</script>
+</head>
+<body class="login-body">
+<form id="form" class="card login-card">
+  <div class="brand"><span class="logo">Au</span><div><b>XAU Smart Trade</b><small>Admin panel</small></div></div>
+  <label class="field-label" for="password">Admin paroli</label>
+  <input id="password" type="password" autocomplete="current-password" required autofocus>
+  <p id="err" class="error"></p>
+  <button class="primary" type="submit">Kirish</button>
+</form>
+<script>
+document.getElementById("form").onsubmit = async (e) => {
+  e.preventDefault();
+  const err = document.getElementById("err");
+  err.textContent = "";
+  const res = await fetch("/api/login", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: document.getElementById("password").value }),
+  });
+  if (res.ok) return (location.href = "/");
+  err.textContent = (await res.json().catch(() => ({}))).error || "Xato";
+};
+</script>
+</body>
+</html>

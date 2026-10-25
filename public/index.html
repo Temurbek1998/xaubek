@@ -13,6 +13,7 @@
   <div class="brand"><span class="logo">Au</span><div><b>XAU Smart Trade</b><small>AI multi-timeframe tahlil</small></div></div>
   <div class="tabs" role="tablist">
     <button class="tab on" data-tab="analyze">📈 Tahlil</button>
+    <button class="tab" data-tab="chat">💬 AI chat</button>
     <button class="tab" data-tab="journal">📒 Aniqlik jurnali</button>
   </div>
   <div class="themes" id="themes" aria-label="Rang mavzusi">
@@ -21,6 +22,7 @@
     <button data-t="emerald" title="Zumrad" style="background:linear-gradient(135deg,#07130f 50%,#10b981 50%)"></button>
     <button data-t="purple" title="Binafsha" style="background:linear-gradient(135deg,#0f0b1a 50%,#a78bfa 50%)"></button>
     <button data-t="light" title="Yorug'" style="background:linear-gradient(135deg,#ffffff 50%,#b7791f 50%)"></button>
+    <button id="logout" class="logout" title="Chiqish">⎋ Chiqish</button>
   </div>
 </nav>
 
@@ -63,12 +65,7 @@
 
     <section class="card">
       <h2><i>3</i> Sozlamalar</h2>
-      <label class="field-label" for="apiKey">Claude API kalit</label>
-      <div class="row">
-        <input id="apiKey" type="password" placeholder="sk-ant-..." autocomplete="off">
-        <button id="saveKey" class="secondary">Saqlash</button>
-      </div>
-      <p class="hint">Faqat shu brauzerda saqlanadi. Kalit: <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a></p>
+      <div id="serverStatus" class="status-line">Server holati tekshirilmoqda...</div>
       <textarea id="note" rows="2" placeholder="Izoh (ixtiyoriy): scalp, risk 1%, London sessiyasi..."></textarea>
       <label class="check"><input id="useNews" type="checkbox" checked> Forex Factory yangiliklari va kalendari (FOMC, CPI, NFP...)</label>
       <button id="analyze" class="primary" disabled>⚡ Tahlil qilish</button>
@@ -85,6 +82,25 @@
       <h2><i>4</i> Natija</h2>
       <div id="result"></div>
     </section>
+  </section>
+</div>
+
+<div class="page hidden" id="page-chat">
+  <section class="card chat-card">
+    <div class="row-between">
+      <h2>💬 AI chat — admin</h2>
+      <button id="chatClear" class="link">Suhbatni tozalash</button>
+    </div>
+    <p class="hint" style="margin:-4px 0 10px">Claude bilan to'g'ridan-to'g'ri gaplashing: tahlil bo'yicha savol bering, grafik rasmini yuboring (Ctrl+V), strategiyani muhokama qiling.</p>
+    <div id="chatLog" class="chat-log"></div>
+    <div id="chatImgs" class="chat-imgs"></div>
+    <label class="check"><input id="chatContext" type="checkbox" checked> Oxirgi tahlil natijasini suhbatga qo'shish <span id="ctxState" class="muted"></span></label>
+    <div class="chat-input">
+      <button id="chatAttach" class="secondary" title="Rasm biriktirish">📎</button>
+      <input id="chatFile" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+      <textarea id="chatText" rows="2" placeholder="Savolingizni yozing... (Enter — yuborish, Shift+Enter — yangi qator)"></textarea>
+      <button id="chatSend" class="primary">Yuborish</button>
+    </div>
   </section>
 </div>
 

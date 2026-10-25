@@ -2,11 +2,80 @@ import express from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import path from "path";
 import { fileURLToPath } from "url";
+import crypto from "crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+app.set("trust proxy", 1);
 app.use(express.json({ limit: "60mb" }));
+
+// ---- Admin access: one password from ADMIN_PASSWORD, no user accounts. ----
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+const SESSION_DAYS = 30;
+const COOKIE = "xau_admin";
+
+function sign(value) {
+  return crypto.createHmac("sha256", SESSION_SECRET).update(value).digest("hex");
+}
+function makeToken() {
+  const exp = String(Date.now() + SESSION_DAYS * 864e5);
+  return `${exp}.${sign(exp)}`;
+}
+function validToken(token) {
+  const [exp, mac] = String(token || "").split(".");
+  if (!exp || !mac || Number(exp) < Date.now()) return false;
+  const expected = Buffer.from(sign(exp));
+  const given = Buffer.from(mac);
+  return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+}
+function readCookie(req, name) {
+  const match = (req.headers.cookie || "").split(/;\s*/).find((c) => c.startsWith(name + "="));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
+}
+const isAdmin = (req) => !ADMIN_PASSWORD || validToken(readCookie(req, COOKIE));
+
+const loginAttempts = new Map(); // ip -> { count, until }
+app.post("/api/login", (req, res) => {
+  const ip = req.ip;
+  const rec = loginAttempts.get(ip) || { count: 0, until: 0 };
+  if (rec.until > Date.now()) {
+    return res.status(429).json({ error: "Ko'p noto'g'ri urinish. 5 daqiqadan keyin qayta urinib ko'ring." });
+  }
+  const given = Buffer.from(String(req.body?.password || ""));
+  const expected = Buffer.from(ADMIN_PASSWORD);
+  const ok = ADMIN_PASSWORD && given.length === expected.length && crypto.timingSafeEqual(given, expected);
+  if (!ok) {
+    rec.count += 1;
+    if (rec.count >= 5) Object.assign(rec, { count: 0, until: Date.now() + 5 * 60 * 1000 });
+    loginAttempts.set(ip, rec);
+    return res.status(401).json({ error: "Parol noto'g'ri." });
+  }
+  loginAttempts.delete(ip);
+  res.cookie(COOKIE, makeToken(), {
+    httpOnly: true, sameSite: "lax", secure: req.secure, maxAge: SESSION_DAYS * 864e5, path: "/",
+  });
+  res.json({ ok: true });
+});
+app.post("/api/logout", (req, res) => {
+  res.clearCookie(COOKIE, { path: "/" });
+  res.json({ ok: true });
+});
+
+app.get("/healthz", (req, res) => res.send("ok"));
+
+const PUBLIC_PATHS = new Set(["/login.html", "/style.css"]);
+app.use((req, res, next) => {
+  if (PUBLIC_PATHS.has(req.path) || isAdmin(req)) return next();
+  if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Avval admin panelga kiring." });
+  res.redirect("/login.html");
+});
 app.use(express.static(path.join(__dirname, "public")));
+
+const API_KEY = process.env.ANTHROPIC_API_KEY || "";
+app.get("/api/status", (req, res) => {
+  res.json({ hasKey: Boolean(API_KEY), model: MODEL, protected: Boolean(ADMIN_PASSWORD) });
+});
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
 const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
@@ -320,9 +389,9 @@ app.get("/api/strategies", (req, res) => {
 });
 
 app.post("/api/analyze", async (req, res) => {
-  const apiKey = req.get("x-claude-key") || process.env.ANTHROPIC_API_KEY;
+  const apiKey = API_KEY;
   if (!apiKey) {
-    return res.status(400).json({ error: "Claude API kalit kiritilmagan." });
+    return res.status(500).json({ error: "Serverda ANTHROPIC_API_KEY o'rnatilmagan (Render → Environment)." });
   }
 
   const { images, note, strategies, useNews } = req.body || {};
@@ -422,7 +491,77 @@ app.post("/api/analyze", async (req, res) => {
   }
 });
 
+const CHAT_PROMPT = `Sen XAU Smart Trade platformasining AI yordamchisisan va admin (treyder) bilan o'zbek tilida gaplashasan.
+Mutaxassisliging: XAU/USD (oltin) texnik tahlili, Volume Profile, SMC/ICT, price action, risk-menejment, fundamental omillar (Fed, CPI, NFP, DXY).
+Agar suhbatga oxirgi tahlil natijasi (JSON) berilgan bo'lsa, savollarga shunga tayanib javob ber va qaysi qismga tayanganingni ayt.
+Admin rasm yuborsa, uni grafik sifatida tahlil qil. Aniq bo'l, bilmagan narsangni bilmayman de, va savdo qarori treyderning o'zida ekanini unutma.`;
+
+// Admin chat with Claude. Streams plain text back to the browser as it is generated.
+app.post("/api/chat", async (req, res) => {
+  if (!API_KEY) {
+    return res.status(500).json({ error: "Serverda ANTHROPIC_API_KEY o'rnatilmagan (Render → Environment)." });
+  }
+  const { messages, context } = req.body || {};
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: "Xabar bo'sh." });
+  }
+  const history = [];
+  for (const m of messages.slice(-30)) {
+    if (!["user", "assistant"].includes(m.role)) continue;
+    const content = [];
+    for (const img of m.images || []) {
+      if (ALLOWED_TYPES.includes(img.mediaType) && typeof img.data === "string") {
+        content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+      }
+    }
+    if (m.text) content.push({ type: "text", text: String(m.text) });
+    if (content.length) history.push({ role: m.role, content });
+  }
+  if (!history.length || history[history.length - 1].role !== "user") {
+    return res.status(400).json({ error: "Oxirgi xabar admin xabari bo'lishi kerak." });
+  }
+  const system = context
+    ? `${CHAT_PROMPT}\n\nOxirgi tahlil natijasi (JSON):\n${JSON.stringify(context).slice(0, 60000)}`
+    : CHAT_PROMPT;
+
+  const client = new Anthropic({ apiKey: API_KEY });
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  try {
+    const stream = client.beta.messages.stream({
+      model: MODEL,
+      max_tokens: 32000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
+      system,
+      messages: history,
+    });
+    res.on("close", () => { if (!res.writableEnded) stream.abort(); });
+    stream.on("text", (delta) => res.write(delta));
+    const message = await stream.finalMessage();
+    if (message.stop_reason === "refusal") res.write("\n\n[Claude bu savolga javob berishdan bosh tortdi.]");
+    if (message.stop_reason === "max_tokens") res.write("\n\n[Javob uzunlik chegarasida kesildi.]");
+    res.end();
+  } catch (err) {
+    if (res.writableEnded || err instanceof Anthropic.APIUserAbortError) return;
+    const msg = err instanceof Anthropic.AuthenticationError
+      ? "Serverdagi API kalit noto'g'ri."
+      : err instanceof Anthropic.RateLimitError
+        ? "So'rovlar limiti oshdi, birozdan keyin urinib ko'ring."
+        : err instanceof Anthropic.APIError
+          ? `Claude API xatosi (${err.status ?? "?"}): ${err.message}`
+          : "Serverda kutilmagan xato.";
+    if (!(err instanceof Anthropic.APIError)) console.error(err);
+    if (!res.headersSent) return res.status(502).json({ error: msg });
+    res.end(`\n\n[Xato: ${msg}]`);
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`XAU Smart Trade ishga tushdi: http://localhost:${PORT}`);
+  if (!ADMIN_PASSWORD) console.warn("DIQQAT: ADMIN_PASSWORD o'rnatilmagan — sayt parolsiz ochiq.");
+  if (!API_KEY) console.warn("DIQQAT: ANTHROPIC_API_KEY o'rnatilmagan — tahlil ishlamaydi.");
 });

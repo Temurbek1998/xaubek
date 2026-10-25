@@ -1,5 +1,4 @@
 const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1H", "4H", "1D", "1W", "1M"];
-const KEY_STORAGE = "xau_claude_key";
 const images = []; // { mediaType, data, url, timeframe }
 
 const $ = (id) => document.getElementById(id);
@@ -15,12 +14,20 @@ try { savedTheme = localStorage.getItem("xau_theme") || "tv"; } catch {}
 setTheme(savedTheme);
 document.querySelectorAll("#themes button").forEach((b) => (b.onclick = () => setTheme(b.dataset.t)));
 
-try { $("apiKey").value = localStorage.getItem(KEY_STORAGE) || ""; } catch {}
-$("saveKey").onclick = () => {
-  try { localStorage.setItem(KEY_STORAGE, $("apiKey").value.trim()); } catch {}
-  $("saveKey").textContent = "Saqlandi ✓";
-  setTimeout(() => ($("saveKey").textContent = "Saqlash"), 1500);
-};
+// Any 401 from the API means the admin session expired.
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) { location.href = "/login.html"; throw new Error("Sessiya tugadi"); }
+  return res;
+}
+
+api("/api/status").then((r) => r.json()).then((st) => {
+  $("serverStatus").innerHTML = st.hasKey
+    ? `<span class="dot ok"></span> Claude API ulangan · model: <b>${esc(st.model)}</b>`
+    : `<span class="dot bad"></span> Serverda <b>ANTHROPIC_API_KEY</b> o'rnatilmagan (Render → Environment)`;
+  $("logout").classList.toggle("hidden", !st.protected);
+}).catch(() => {});
+$("logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login.html"; };
 
 // Guess the timeframe from the file name (e.g. "XAUUSD_4H.png") or pick the next unused one.
 function guessTimeframe(name) {
@@ -67,6 +74,8 @@ document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => {
   document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("on", x === t));
   $("page-analyze").classList.toggle("hidden", t.dataset.tab !== "analyze");
   $("page-journal").classList.toggle("hidden", t.dataset.tab !== "journal");
+  $("page-chat").classList.toggle("hidden", t.dataset.tab !== "chat");
+  if (t.dataset.tab === "chat") { updateCtxState(); $("chatText").focus(); }
 }));
 
 function alertMsg(msg) {
@@ -75,7 +84,7 @@ function alertMsg(msg) {
 }
 
 let strategyLabels = {};
-fetch("/api/strategies").then((r) => r.json()).then((list) => {
+api("/api/strategies").then((r) => r.json()).then((list) => {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem("xau_strategies")); } catch {}
   list.forEach((s) => (strategyLabels[s.id] = s.label));
@@ -100,12 +109,12 @@ drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); [...e.dataTransfer.files].forEach(addFile); };
 document.addEventListener("paste", (e) => {
-  [...(e.clipboardData?.items || [])].filter((it) => it.kind === "file").forEach((it) => addFile(it.getAsFile()));
+  const onChat = !$("page-chat").classList.contains("hidden");
+  [...(e.clipboardData?.items || [])].filter((it) => it.kind === "file")
+    .forEach((it) => (onChat ? addChatFile : addFile)(it.getAsFile()));
 });
 
 $("analyze").onclick = async () => {
-  const key = $("apiKey").value.trim();
-  if (!key) return alertMsg("Avval Claude API kalitini kiriting.");
   const strategies = selectedStrategies();
   if (strategies.length === 0) return alertMsg("Kamida bitta strategiyani tanlang.");
   // Send higher timeframes first so Claude reads them top-down.
@@ -115,9 +124,9 @@ $("analyze").onclick = async () => {
   showResultCard();
   $("result").innerHTML = `<p><span class="spinner"></span>Claude ${sorted.length} ta grafikni ${strategies.length} ta strategiya bo'yicha tahlil qilmoqda${useNews ? ", kun yangiliklarini qidirmoqda" : ""}... (1–4 daqiqa)</p>`;
   try {
-    const res = await fetch("/api/analyze", {
+    const res = await api("/api/analyze", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-claude-key": key },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         note: $("note").value.trim(),
         strategies,
@@ -127,6 +136,7 @@ $("analyze").onclick = async () => {
     });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || `Xato ${res.status}`);
+    lastAnalysis = body.analysis;
     showResult(body.analysis, body, sorted);
   } catch (err) {
     alertMsg(err.message);
@@ -326,3 +336,83 @@ function renderJournal() {
   }));
 }
 renderJournal();
+
+
+// ---- Admin chat with Claude (streamed). ----
+let lastAnalysis = null;
+const chat = []; // { role, text, images: [{ mediaType, data, url }] }
+const chatImgs = [];
+try { chat.push(...(JSON.parse(localStorage.getItem("xau_chat")) || []).map((m) => ({ ...m, images: [] }))); } catch {}
+function saveChat() {
+  // Images are not persisted to keep localStorage small.
+  try { localStorage.setItem("xau_chat", JSON.stringify(chat.slice(-40).map(({ role, text }) => ({ role, text })))); } catch {}
+}
+function updateCtxState() {
+  $("ctxState").textContent = lastAnalysis ? "(mavjud)" : "(hali tahlil qilinmagan)";
+}
+
+// Light formatting for Claude's replies: escape first, then **bold**, `code`, line breaks.
+const fmt = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\n/g, "<br>");
+
+function renderChat() {
+  $("chatLog").innerHTML = chat.length ? chat.map((m) => `
+    <div class="msg ${m.role}">
+      <div class="who">${m.role === "user" ? "Siz" : "Claude"}</div>
+      ${(m.images || []).map((i) => `<img src="${i.url}" alt="">`).join("")}
+      <div class="bubble">${m.text ? fmt(m.text) : '<span class="spinner"></span>'}</div>
+    </div>`).join("") : `<p class="hint">Masalan: "Nega 15m tanlading?", "SL ni qayerga qo'ysam xavfsizroq?", "Bugungi CPI oltinga qanday ta'sir qiladi?"</p>`;
+  $("chatLog").scrollTop = $("chatLog").scrollHeight;
+}
+function renderChatImgs() {
+  $("chatImgs").innerHTML = chatImgs.map((i, n) => `<span><img src="${i.url}" alt=""><button data-n="${n}">✕</button></span>`).join("");
+  $("chatImgs").querySelectorAll("button").forEach((b) => (b.onclick = () => { chatImgs.splice(+b.dataset.n, 1); renderChatImgs(); }));
+}
+function addChatFile(file) {
+  if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type) || chatImgs.length >= 5) return;
+  const reader = new FileReader();
+  reader.onload = () => { chatImgs.push({ mediaType: file.type, data: reader.result.split(",")[1], url: reader.result }); renderChatImgs(); };
+  reader.readAsDataURL(file);
+}
+$("chatAttach").onclick = () => $("chatFile").click();
+$("chatFile").onchange = (e) => { [...e.target.files].forEach(addChatFile); e.target.value = ""; };
+$("chatClear").onclick = () => { chat.length = 0; saveChat(); renderChat(); };
+$("chatText").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("chatSend").click(); }
+});
+
+$("chatSend").onclick = async () => {
+  const text = $("chatText").value.trim();
+  if (!text && !chatImgs.length) return;
+  chat.push({ role: "user", text, images: chatImgs.splice(0) });
+  const reply = { role: "assistant", text: "", images: [] };
+  chat.push(reply);
+  $("chatText").value = "";
+  renderChatImgs(); renderChat();
+  $("chatSend").disabled = true;
+  try {
+    const res = await api("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: chat.slice(0, -1).map(({ role, text, images }) => ({ role, text, images: images.map(({ mediaType, data }) => ({ mediaType, data })) })),
+        context: $("chatContext").checked ? lastAnalysis : null,
+      }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Xato ${res.status}`);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      reply.text += dec.decode(value, { stream: true });
+      renderChat();
+    }
+    if (!reply.text) reply.text = "[Bo'sh javob]";
+  } catch (err) {
+    reply.text = `⚠️ ${err.message}`;
+  } finally {
+    $("chatSend").disabled = false;
+    saveChat(); renderChat();
+  }
+};
+renderChat();

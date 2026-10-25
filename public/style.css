@@ -164,3 +164,31 @@ body { transition: background .2s, color .2s; }
 [data-theme="light"] .NEUTRAL, [data-theme="light"] .RANGE, [data-theme="light"] .WAIT { color: #424a53; }
 [data-theme="light"] .thumb .del { background: #0008; }
 .hidden { display: none !important; }
+.logout { margin-left: 8px; background: none; color: var(--muted); border: 1px solid var(--line); padding: 5px 10px; font-size: 13px; }
+.logout:hover { color: var(--text); border-color: var(--red); }
+.status-line { font-size: 13px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); } .dot.bad { background: var(--red); }
+#page-chat { grid-template-columns: 1fr; max-width: 980px; }
+.chat-card { display: flex; flex-direction: column; }
+.chat-log { min-height: 300px; max-height: calc(100vh - 420px); overflow-y: auto; display: flex; flex-direction: column; gap: 12px;
+  padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; }
+.msg { max-width: 85%; }
+.msg.user { align-self: flex-end; text-align: right; }
+.msg .who { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+.msg .bubble { display: inline-block; text-align: left; padding: 10px 14px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); line-height: 1.6; }
+.msg.user .bubble { background: var(--gold); color: var(--on-accent); border-color: transparent; }
+.msg img { display: block; max-width: 260px; max-height: 180px; border-radius: 10px; margin: 0 0 6px auto; border: 1px solid var(--line); }
+.msg code { background: color-mix(in srgb, var(--text) 10%, transparent); padding: 0 4px; border-radius: 4px; }
+.chat-imgs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.chat-imgs span { position: relative; }
+.chat-imgs img { height: 64px; border-radius: 8px; border: 1px solid var(--line); display: block; }
+.chat-imgs button { position: absolute; top: 2px; right: 2px; padding: 0 6px; background: #000a; color: #fff; font-size: 12px; }
+.chat-input { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input textarea { margin: 0; flex: 1; }
+.chat-input button.primary { width: auto; padding: 12px 20px; }
+.login-body { display: grid; place-items: center; padding: 16px; }
+.login-card { width: 100%; max-width: 380px; display: grid; gap: 10px; }
+.login-card .brand { margin-bottom: 10px; }
+.login-card .error { margin: 0; min-height: 1em; font-size: 14px; }
+.themes .logout { width: auto; height: auto; border-radius: 8px; padding: 4px 10px; }

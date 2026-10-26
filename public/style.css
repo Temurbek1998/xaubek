@@ -229,3 +229,9 @@ body { transition: background .2s, color .2s; }
 .styles button.on { border-color: var(--gold); background: color-mix(in srgb, var(--gold) 14%, transparent); }
 .result-chat { margin-top: 22px; padding-top: 6px; border-top: 1px solid var(--line); }
 .rc-log { min-height: 120px; max-height: 480px; }
+
+.live-btn { width: 100%; margin-top: 12px; padding: 11px; border-radius: 12px; font-weight: 700; border: 1px solid var(--gold); color: var(--gold); background: color-mix(in srgb, var(--gold) 10%, transparent); cursor: pointer; }
+.live-btn:hover { background: color-mix(in srgb, var(--gold) 18%, transparent); }
+.live-btn:disabled { opacity: .6; cursor: wait; }
+.live-tag { position: absolute; top: 6px; left: 6px; background: #089981; color: #fff; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; }
+.live-tf { border-top: 1px solid var(--line); padding: 7px 10px; font-weight: 700; font-size: 13px; }

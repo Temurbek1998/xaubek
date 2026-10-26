@@ -73,8 +73,47 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, "public")));
 
 const API_KEY = process.env.ANTHROPIC_API_KEY || "";
+const TWELVEDATA_KEY = process.env.TWELVEDATA_API_KEY || "";
 app.get("/api/status", (req, res) => {
-  res.json({ hasKey: Boolean(API_KEY), model: MODEL, protected: Boolean(ADMIN_PASSWORD) });
+  res.json({ hasKey: Boolean(API_KEY), hasData: Boolean(TWELVEDATA_KEY), model: MODEL, protected: Boolean(ADMIN_PASSWORD) });
+});
+
+// Live XAU/USD candles from Twelve Data. Fetched only when the user asks (no background polling).
+const LIVE_FRAMES = {
+  scalping: ["1h", "15min", "5min", "1min"],
+  intraday: ["4h", "1h", "15min", "5min"],
+  swing: ["1day", "4h", "1h", "15min"],
+  position: ["1week", "1day", "4h", "1h"],
+};
+const TF_NAMES = { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D", "1week": "1W" };
+const candleCache = new Map(); // interval -> { at, candles }
+
+async function fetchCandles(interval) {
+  const hit = candleCache.get(interval);
+  if (hit && Date.now() - hit.at < 60_000) return hit.candles;
+  const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${interval}&outputsize=120&order=asc&timezone=UTC&apikey=${encodeURIComponent(TWELVEDATA_KEY)}`;
+  const r = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok || body.status === "error" || !Array.isArray(body.values)) {
+    throw new Error(body.message || `Twelve Data xatosi (${r.status})`);
+  }
+  const candles = body.values.map((v) => ({ t: v.datetime, o: +v.open, h: +v.high, l: +v.low, c: +v.close }))
+    .filter((c) => [c.o, c.h, c.l, c.c].every(Number.isFinite));
+  candleCache.set(interval, { at: Date.now(), candles });
+  return candles;
+}
+
+app.get("/api/candles", async (req, res) => {
+  if (!TWELVEDATA_KEY) return res.status(500).json({ error: "Serverda TWELVEDATA_API_KEY o'rnatilmagan (Render → Environment)." });
+  const frames = LIVE_FRAMES[req.query.style] || LIVE_FRAMES.intraday;
+  try {
+    const out = [];
+    // Sequential: the free plan allows 8 requests per minute.
+    for (const interval of frames) out.push({ timeframe: TF_NAMES[interval], candles: await fetchCandles(interval) });
+    res.json({ frames: out, fetchedAt: Date.now() });
+  } catch (err) {
+    res.status(502).json({ error: `Jonli ma'lumotni olib bo'lmadi: ${err.message}` });
+  }
 });
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
@@ -199,7 +238,7 @@ Vazifang:
    - position — shu narxlarning rasmdagi joyi (TradingView Long/Short position vositasi kabi): image_index — strategiya timeframe'idagi rasm raqami, x1 — kirish shamining x koordinatasi, x2 — qutining o'ng cheti (odatda x1+0.25, ko'pi bilan 1), y_entry/y_sl/y_tp1/y_tp2 — narx shkalasiga qarab hisoblangan y koordinatalar. Setup bo'lmasa image_index = 0.
    - drawings — shu strategiyaga xos belgilar: SMC — order block, FVG, likvidlik, BOS/CHoCH; Volume Profile — diapazon, POC, soxta chiqish; Fibonacci — 0.5/0.618/0.786 darajalari; Supply/Demand — zonalar; Breakout — yorilgan daraja; Wyckoff — spring/upthrust; figuralar — bo'yin chizig'i; sessiyalar — Asia range. Faqat grafikda haqiqatan ko'rgan narsangni chiz.
 6. Agar kun yangiliklari berilgan bo'lsa, ularni (FOMC, CPI, NFP, Fed nutqlari, DXY, real yield, geosiyosat) texnik tahlil bilan birlashtir: bozor nima sababdan shu yo'nalishda ketayotganini va yaqin soatlarda qanday yangilik xavfi borligini tushuntir. Muhim yangilik oldidan kirishni tavsiya qilma yoki ogohlantir.
-7. Yakuniy reja uchun trade_plan.position ni (yuqoridagi kabi) to'ldir — pozitsiya qutisini sayt o'zi chizadi, shuning uchun Entry/SL/TP ni drawings'da qayta chizma. Umumiy "drawings" ga yakuniy rejani asoslovchi asosiy zonalarni (kind "zone": order block, FVG, supply/demand, diapazon / POC), muhim darajalarni (kind "hline") va kutilayotgan narx harakatini (kind "arrow") chiz. Boshqa rasmlarga ham asosiy darajalarni chizishing mumkin. Koordinatalar rasm o'lchamiga nisbatan 0 dan 1 gacha kasr: x=0 chap chet, x=1 o'ng chet, y=0 yuqori chet, y=1 pastki chet. Chiziqning y qiymatini grafikning o'ng tomonidagi narx shkalasiga qarab, narx aynan shu balandlikka to'g'ri keladigan qilib hisobla. image_index — rasm raqami (Rasm 1, Rasm 2...). hline uchun y2=y1; label uchun x2=x1, y2=y1.
+7. Yakuniy reja uchun trade_plan.position ni (yuqoridagi kabi) to'ldir — pozitsiya qutisini sayt o'zi chizadi, shuning uchun Entry/SL/TP ni drawings'da qayta chizma. Umumiy "drawings" ga yakuniy rejani asoslovchi asosiy zonalarni (kind "zone": order block, FVG, supply/demand, diapazon / POC), muhim darajalarni (kind "hline") va kutilayotgan narx harakatini (kind "arrow") chiz. Boshqa rasmlarga ham asosiy darajalarni chizishing mumkin. Koordinatalar rasm o'lchamiga nisbatan 0 dan 1 gacha kasr: x=0 chap chet, x=1 o'ng chet, y=0 yuqori chet, y=1 pastki chet. Chiziqning y qiymatini grafikning o'ng tomonidagi narx shkalasiga qarab, narx aynan shu balandlikka to'g'ri keladigan qilib hisobla. image_index — rasm raqami (Rasm 1, Rasm 2...). hline uchun y2=y1; label uchun x2=x1, y2=y1. price1/price2 — chizmaning narxi: hline uchun price1 = daraja narxi, zone uchun price1 = yuqori chegara, price2 = pastki chegara, arrow uchun price1 = boshlanish, price2 = tugash narxi; noma'lum bo'lsa 0. "JONLI" rasmlarda sayt y ni shu narxlardan aniq hisoblaydi, shuning uchun narxlarni OHLC ma'lumotidan aniq ol.
 8. Yakuniy savdo rejasini strategiyalar konfluensiyasi (bir nechtasi bir xil yo'nalish va zonani ko'rsatishi) asosida tuz va qaysi strategiyalar uni qo'llab-quvvatlashini yoz.
 9. trade_plan'dagi *_price maydonlariga aniq raqam yoz (masalan 2662.5) — lot kalkulyatori shundan foydalanadi. Kirish zona bo'lsa, o'rtasini yoz. Narxni shkaladan o'qib bo'lmasa yoki signal WAIT bo'lsa, 0 yoz.
 10. Rasmlar yangiligini tekshir: har bir grafikning vaqt shkalasidan oxirgi shamning sanasi/vaqtini o'qi va hozirgi vaqt bilan solishtir. Agar biror rasm eski bo'lsa (oxirgi sham timeframe'ga nisbatan juda oldin — masalan 15m grafikda bir necha soat, 4H/1D grafikda 1 kundan ko'p; dam olish kunlarida bozor yopiqligini hisobga ol) yoki rasmlar turli kunlarga tegishli bo'lsa, "freshness_warning" ga qaysi rasm va qancha eski ekanini yoz. Sana o'qib bo'lmasa, buni ham yoz. Hammasi yangi bo'lsa — bo'sh qator.
@@ -226,8 +265,10 @@ const DRAWINGS_SCHEMA = {
       y1: { type: "number" },
       x2: { type: "number" },
       y2: { type: "number" },
+      price1: { type: "number" },
+      price2: { type: "number" },
     },
-    required: ["image_index", "kind", "color", "label", "x1", "y1", "x2", "y2"],
+    required: ["image_index", "kind", "color", "label", "x1", "y1", "x2", "y2", "price1", "price2"],
   },
 };
 
@@ -490,6 +531,7 @@ function normalizeAnalysis(a) {
   const drawings = (d) => arr(d).map((x) => ({
     image_index: Math.trunc(num(x?.image_index)), kind: str(x?.kind) || "label", color: str(x?.color) || "gold",
     label: str(x?.label), x1: num(x?.x1), y1: num(x?.y1), x2: num(x?.x2), y2: num(x?.y2),
+    price1: num(x?.price1), price2: num(x?.price2),
   }));
   const tp = a.trade_plan || {};
   return {
@@ -549,7 +591,18 @@ app.post("/api/analyze", async (req, res) => {
     if (!ALLOWED_TYPES.includes(img.mediaType) || typeof img.data !== "string") {
       return res.status(400).json({ error: `${i + 1}-rasm formati qo'llab-quvvatlanmaydi.` });
     }
-    content.push({ type: "text", text: `Rasm ${i + 1} — timeframe: ${img.timeframe || "noma'lum"}` });
+    const sc = img.scale;
+    const live = sc && [sc.top, sc.bottom, sc.max, sc.min, sc.left, sc.right, sc.count].every(Number.isFinite) && sc.max > sc.min;
+    if (!live) delete img.scale;
+    content.push({
+      type: "text",
+      text: live
+        ? `Rasm ${i + 1} — timeframe: ${img.timeframe} — JONLI MA'LUMOT (Twelve Data, sayt chizgan grafik).\n` +
+          `Narx shkalasi: y = ${sc.top.toFixed(4)} da ${sc.max}, y = ${sc.bottom.toFixed(4)} da ${sc.min} (chiziqli). ` +
+          `Shamlar: ${sc.count} ta, birinchisining markazi x = ${sc.left.toFixed(4)}, oxirgisiniki x = ${sc.right.toFixed(4)} (teng oraliqda). ` +
+          `Oxirgi sham — eng yangi narx. OHLC (UTC vaqt, open, high, low, close):\n${String(img.ohlc || "").slice(0, 9000)}`
+        : `Rasm ${i + 1} — timeframe: ${img.timeframe || "noma'lum"}`,
+    });
     content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
   }
   content.push({
@@ -567,10 +620,10 @@ app.post("/api/analyze", async (req, res) => {
   });
 
   // Runs in the background so the analysis survives the browser tab going to sleep; the page polls /api/jobs/:id.
-  const job = createJob(images);
+  const job = createJob(images.map(({ ohlc, ...rest }) => rest));
   res.status(202).json({ jobId: job.id });
   runAnalysis(content, Boolean(useNews))
-    .then((result) => Object.assign(job, { status: "done", result }))
+    .then((result) => { snapToPrices(result.analysis, job.images); Object.assign(job, { status: "done", result }); })
     .catch((err) => Object.assign(job, { status: "error", error: analysisErrorMessage(err) }))
     .finally(() => { job.finishedAt = Date.now(); });
 });
@@ -583,6 +636,34 @@ app.get("/api/jobs/:id", (req, res) => {
   if (job.status === "error") out.error = job.error;
   res.json(out);
 });
+
+// On live charts the site knows the exact price scale, so drawings and position boxes are placed by price, not by Claude's y guess.
+function snapToPrices(a, images) {
+  if (!a) return;
+  const yOf = (idx, price) => {
+    const sc = images[idx - 1]?.scale;
+    if (!sc || !(price > 0)) return null;
+    return sc.top + ((sc.max - price) / (sc.max - sc.min)) * (sc.bottom - sc.top);
+  };
+  const fixDrawings = (list) => (list || []).forEach((d) => {
+    const y1 = yOf(d.image_index, d.price1);
+    if (y1 === null) return;
+    const y2 = yOf(d.image_index, d.price2);
+    d.y1 = y1;
+    d.y2 = d.kind === "hline" || d.kind === "label" || y2 === null ? y1 : y2;
+  });
+  const fixPos = (pos, prices) => {
+    if (!pos || yOf(pos.image_index, prices.e) === null) return;
+    pos.y_entry = yOf(pos.image_index, prices.e);
+    if (prices.s > 0) pos.y_sl = yOf(pos.image_index, prices.s);
+    if (prices.t1 > 0) pos.y_tp1 = yOf(pos.image_index, prices.t1);
+    pos.y_tp2 = prices.t2 > 0 ? yOf(pos.image_index, prices.t2) : 0;
+  };
+  const pricesOf = (x) => ({ e: x.entry_price, s: x.stop_loss_price, t1: x.take_profit_1_price, t2: x.take_profit_2_price });
+  fixDrawings(a.drawings);
+  fixPos(a.trade_plan?.position, pricesOf(a.trade_plan || {}));
+  for (const st of a.strategies || []) { fixDrawings(st.drawings); fixPos(st.position, pricesOf(st)); }
+}
 
 class AnalysisError extends Error {}
 

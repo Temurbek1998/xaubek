@@ -25,6 +25,9 @@ api("/api/status").then((r) => r.json()).then((st) => {
   $("serverStatus").innerHTML = st.hasKey
     ? `<span class="dot ok"></span> Claude API ulangan · model: <b>${esc(st.model)}</b>`
     : `<span class="dot bad"></span> Serverda <b>ANTHROPIC_API_KEY</b> o'rnatilmagan (Render → Environment)`;
+  $("serverStatus").innerHTML += st.hasData
+    ? `<br><span class="dot ok"></span> Jonli ma'lumot (Twelve Data) ulangan`
+    : `<br><span class="dot bad"></span> Jonli ma'lumot uchun <b>TWELVEDATA_API_KEY</b> kerak (Render → Environment)`;
   $("logout").classList.toggle("hidden", !st.protected);
 }).catch(() => {});
 $("logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login.html"; };
@@ -58,12 +61,99 @@ function render() {
     <div class="thumb">
       <img src="${img.url}" alt="Grafik ${i + 1}">
       <button class="del" data-i="${i}" title="O'chirish">✕</button>
-      <select data-i="${i}">${TIMEFRAMES.map((tf) => `<option ${tf === img.timeframe ? "selected" : ""}>${tf}</option>`).join("")}</select>
+      ${img.live ? `<span class="live-tag">📡 jonli</span><div class="live-tf">${esc(img.timeframe)}</div>`
+        : `<select data-i="${i}">${TIMEFRAMES.map((tf) => `<option ${tf === img.timeframe ? "selected" : ""}>${tf}</option>`).join("")}</select>`}
     </div>`).join("");
   $("thumbs").querySelectorAll(".del").forEach((b) => (b.onclick = () => { images.splice(+b.dataset.i, 1); render(); }));
   $("thumbs").querySelectorAll("select").forEach((s) => (s.onchange = () => (images[+s.dataset.i].timeframe = s.value)));
   $("analyze").disabled = images.length === 0;
 }
+
+// ---- Live data: the site draws XAU/USD candles itself, so it knows the exact price of every pixel.
+const LIVE = { w: 1280, h: 720, top: 46, bottom: 44, left: 12, right: 86 };
+
+function renderLiveChart(tf, candles) {
+  const { w, h } = LIVE;
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const pTop = LIVE.top, pBot = h - LIVE.bottom, pL = LIVE.left, pR = w - LIVE.right;
+  let max = Math.max(...candles.map((c) => c.h)), min = Math.min(...candles.map((c) => c.l));
+  const pad = (max - min) * 0.06 || 1;
+  max = +(max + pad).toFixed(2); min = +(min - pad).toFixed(2);
+  const yOf = (p) => pTop + ((max - p) / (max - min)) * (pBot - pTop);
+  // Empty space on the right (like TradingView) leaves room for the position box and projected moves.
+  const step = (pR - pL) / (candles.length + 24);
+  const xOf = (i) => pL + step * (i + 0.5);
+
+  ctx.fillStyle = "#131722"; ctx.fillRect(0, 0, w, h);
+  ctx.font = "13px system-ui, sans-serif"; ctx.textBaseline = "middle";
+  // Grid and price axis.
+  const raw = (max - min) / 8, mag = 10 ** Math.floor(Math.log10(raw));
+  const tick = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((t) => t >= raw);
+  for (let p = Math.ceil(min / tick) * tick; p <= max; p += tick) {
+    const y = yOf(p);
+    ctx.strokeStyle = "#2a2e39"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pL, y); ctx.lineTo(pR, y); ctx.stroke();
+    ctx.fillStyle = "#b2b5be"; ctx.fillText(p.toFixed(2), pR + 8, y);
+  }
+  // Time axis.
+  const every = Math.ceil(candles.length / 8);
+  ctx.textAlign = "center";
+  candles.forEach((c, i) => {
+    if (i % every) return;
+    const x = xOf(i);
+    ctx.strokeStyle = "#1f2330"; ctx.beginPath(); ctx.moveTo(x, pTop); ctx.lineTo(x, pBot); ctx.stroke();
+    ctx.fillStyle = "#787b86"; ctx.fillText(/1D|1W/.test(tf) ? c.t.slice(0, 10) : c.t.slice(5, 16), x, pBot + 18);
+  });
+  ctx.textAlign = "left";
+  // Candles.
+  const bw = Math.max(1, step * 0.66);
+  candles.forEach((c, i) => {
+    const x = xOf(i), up = c.c >= c.o;
+    ctx.strokeStyle = ctx.fillStyle = up ? "#089981" : "#f23645";
+    ctx.beginPath(); ctx.moveTo(x, yOf(c.h)); ctx.lineTo(x, yOf(c.l)); ctx.stroke();
+    const yo = yOf(c.o), yc = yOf(c.c);
+    ctx.fillRect(x - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yc - yo)));
+  });
+  // Last price line and title.
+  const last = candles[candles.length - 1], lc = last.c >= last.o ? "#089981" : "#f23645";
+  ctx.setLineDash([4, 4]); ctx.strokeStyle = lc;
+  ctx.beginPath(); ctx.moveTo(pL, yOf(last.c)); ctx.lineTo(pR, yOf(last.c)); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = lc; ctx.fillRect(pR + 2, yOf(last.c) - 10, LIVE.right - 4, 20);
+  ctx.fillStyle = "#fff"; ctx.font = "bold 13px system-ui, sans-serif"; ctx.fillText(last.c.toFixed(2), pR + 8, yOf(last.c));
+  ctx.font = "bold 17px system-ui, sans-serif"; ctx.fillStyle = "#d1d4dc";
+  ctx.fillText(`XAU/USD · ${tf} · Twelve Data · oxirgi sham ${last.t} UTC · O ${last.o.toFixed(2)} H ${last.h.toFixed(2)} L ${last.l.toFixed(2)} C ${last.c.toFixed(2)}`, pL + 4, 22);
+
+  const url = canvas.toDataURL("image/png");
+  return {
+    mediaType: "image/png", data: url.split(",")[1], url, timeframe: tf, live: true,
+    scale: { top: pTop / h, bottom: pBot / h, max, min, left: xOf(0) / w, right: xOf(candles.length - 1) / w, count: candles.length },
+    ohlc: candles.map((c) => `${c.t},${c.o},${c.h},${c.l},${c.c}`).join("\n"),
+  };
+}
+
+async function loadLiveCharts() {
+  const btn = $("liveBtn");
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.innerHTML = `<span class="spinner"></span>Yuklanmoqda...`;
+  try {
+    const res = await api(`/api/candles?style=${encodeURIComponent(tradeStyle)}`);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `Xato ${res.status}`);
+    for (let i = images.length - 1; i >= 0; i--) if (images[i].live) images.splice(i, 1);
+    for (const f of body.frames) if (f.candles.length > 5) images.push(renderLiveChart(f.timeframe, f.candles));
+    render();
+    return true;
+  } catch (err) {
+    alertMsg(err.message);
+    return false;
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+}
+$("liveBtn").onclick = loadLiveCharts;
 
 function showResultCard() {
   $("resultCard").classList.remove("hidden");
@@ -134,6 +224,8 @@ let pollTimer = null;
 $("analyze").onclick = async () => {
   const strategies = selectedStrategies();
   if (strategies.length === 0) return alertMsg("Kamida bitta strategiyani tanlang.");
+  // Live charts are re-fetched right before the analysis so Claude always sees the latest candles.
+  if (images.some((i) => i.live) && !(await loadLiveCharts())) return;
   // Send higher timeframes first so Claude reads them top-down.
   const sorted = [...images].sort((a, b) => TIMEFRAMES.indexOf(b.timeframe) - TIMEFRAMES.indexOf(a.timeframe));
   const useNews = $("useNews").checked;
@@ -149,7 +241,7 @@ $("analyze").onclick = async () => {
         strategies,
         useNews,
         style: tradeStyle,
-        images: sorted.map(({ mediaType, data, timeframe }) => ({ mediaType, data, timeframe })),
+        images: sorted.map(({ mediaType, data, timeframe, scale, ohlc }) => ({ mediaType, data, timeframe, scale, ohlc })),
       }),
     });
     const body = await res.json();

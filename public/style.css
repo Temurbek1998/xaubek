@@ -212,3 +212,12 @@ body { transition: background .2s, color .2s; }
 .plan.mini { margin-bottom: 10px; } .plan.mini div { padding: 8px 10px; }
 .strat-prices { font-size: 14px; }
 .show-plan { margin: 4px 0 8px; font-size: 13px; padding: 6px 12px; }
+@media (max-width: 700px) {
+  .topbar { position: static; padding: 10px 12px; }
+  .tabs { order: 3; width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: none; padding: 7px 12px; }
+  .plan-pick { position: static; }
+  .hero { padding-top: 16px; }
+  .hero .steps { display: none; }
+}

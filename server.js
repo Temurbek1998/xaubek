@@ -442,6 +442,67 @@ app.get("/api/strategies", (req, res) => {
   res.json(Object.entries(STRATEGIES).map(([id, st]) => ({ id, label: st.label, rules: st.rules })));
 });
 
+// The schema is too large for constrained decoding, so it goes into the prompt and the reply is parsed and normalized.
+const ANALYSIS_SYSTEM = `${SYSTEM_PROMPT}
+
+JAVOB FORMATI: javobing FAQAT bitta JSON obyekt bo'lsin — undan oldin yoki keyin hech qanday matn, izoh yoki \`\`\` belgisi yozma. JSON quyidagi JSON Schema'ga to'liq mos bo'lsin (barcha maydonlar majburiy, matnlar o'zbek tilida):
+${JSON.stringify(ANALYSIS_SCHEMA)}`;
+
+const textOf = (message) => message.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+
+function parseJson(text) {
+  const t = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  const start = t.indexOf("{"), end = t.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try { return JSON.parse(t.slice(start, end + 1)); } catch { return null; }
+}
+
+// Fill any field the model left out so the page never breaks on a partial answer.
+function normalizeAnalysis(a) {
+  const str = (v) => (v == null ? "" : String(v));
+  const num = (v) => (Number.isFinite(+v) ? +v : 0);
+  const arr = (v) => (Array.isArray(v) ? v : []);
+  const pos = (p) => ({
+    image_index: Math.trunc(num(p?.image_index)), x1: num(p?.x1), x2: num(p?.x2),
+    y_entry: num(p?.y_entry), y_sl: num(p?.y_sl), y_tp1: num(p?.y_tp1), y_tp2: num(p?.y_tp2),
+  });
+  const drawings = (d) => arr(d).map((x) => ({
+    image_index: Math.trunc(num(x?.image_index)), kind: str(x?.kind) || "label", color: str(x?.color) || "gold",
+    label: str(x?.label), x1: num(x?.x1), y1: num(x?.y1), x2: num(x?.x2), y2: num(x?.y2),
+  }));
+  const tp = a.trade_plan || {};
+  return {
+    overall_bias: str(a.overall_bias) || "NEUTRAL",
+    summary: str(a.summary),
+    timeframes: arr(a.timeframes).map((t) => ({ timeframe: str(t?.timeframe), trend: str(t?.trend) || "RANGE", key_levels: str(t?.key_levels), notes: str(t?.notes) })),
+    strategies: arr(a.strategies).map((s) => ({
+      strategy: str(s?.strategy), signal: str(s?.signal) || "WAIT", timeframe: str(s?.timeframe), score: num(s?.score), reasoning: str(s?.reasoning),
+      entry_price: num(s?.entry_price), stop_loss_price: num(s?.stop_loss_price),
+      take_profit_1_price: num(s?.take_profit_1_price), take_profit_2_price: num(s?.take_profit_2_price),
+      position: pos(s?.position), drawings: drawings(s?.drawings),
+      checks: arr(s?.checks).map((c) => ({ rule: str(c?.rule), met: Boolean(c?.met), evidence: str(c?.evidence) })),
+    })),
+    best_strategy: str(a.best_strategy),
+    best_strategy_reason: str(a.best_strategy_reason),
+    market_reason: str(a.market_reason),
+    news_impact: str(a.news_impact),
+    drawings: drawings(a.drawings),
+    supporting_strategies: arr(a.supporting_strategies).map(str),
+    recommended_entry_timeframe: str(a.recommended_entry_timeframe),
+    entry_timeframe_reason: str(a.entry_timeframe_reason),
+    trade_plan: {
+      direction: str(tp.direction) || "WAIT", entry: str(tp.entry), stop_loss: str(tp.stop_loss),
+      take_profit_1: str(tp.take_profit_1), take_profit_2: str(tp.take_profit_2), risk_reward: str(tp.risk_reward),
+      confirmation: str(tp.confirmation), invalidation: str(tp.invalidation),
+      entry_price: num(tp.entry_price), stop_loss_price: num(tp.stop_loss_price),
+      take_profit_1_price: num(tp.take_profit_1_price), take_profit_2_price: num(tp.take_profit_2_price),
+      position: pos(tp.position),
+    },
+    confidence: str(a.confidence) || "LOW",
+    risks: arr(a.risks).map(str),
+  };
+}
+
 app.post("/api/analyze", async (req, res) => {
   const apiKey = API_KEY;
   if (!apiKey) {
@@ -498,34 +559,41 @@ app.post("/api/analyze", async (req, res) => {
         : "Yangiliklar ma'lumoti berilmagan — news_impact maydonida buni ayt va faqat texnik tahlilga tayan.",
     });
 
-    const stream = client.beta.messages.stream({
+    const analysisRequest = (messages, effort) => client.beta.messages.stream({
       model: MODEL,
       max_tokens: 128000,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       thinking: { type: "adaptive" },
-      output_config: {
-        effort: process.env.ANALYSIS_EFFORT || "xhigh",
-        format: { type: "json_schema", schema: ANALYSIS_SCHEMA },
-      },
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content }],
-    });
-    const message = await stream.finalMessage();
+      output_config: { effort },
+      system: [{ type: "text", text: ANALYSIS_SYSTEM, cache_control: { type: "ephemeral" } }],
+      messages,
+    }).finalMessage();
 
+    const messages = [{ role: "user", content }];
+    let message = await analysisRequest(messages, process.env.ANALYSIS_EFFORT || "xhigh");
     if (message.stop_reason === "refusal") {
       return res.status(422).json({ error: "Claude bu so'rovni tahlil qilishdan bosh tortdi. Boshqa rasmlar bilan urinib ko'ring." });
     }
     if (message.stop_reason === "max_tokens") {
-      return res.status(502).json({ error: "Javob juda uzun bo'lib kesilib qoldi. Kamroq rasm bilan urinib ko'ring." });
+      return res.status(502).json({ error: "Javob juda uzun bo'lib kesilib qoldi. Kamroq rasm yoki strategiya bilan urinib ko'ring." });
     }
-    const text = message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-    let analysis;
-    try {
-      analysis = JSON.parse(text);
-    } catch {
-      return res.status(502).json({ error: "Claude javobini o'qib bo'lmadi.", raw: text });
+    let text = textOf(message);
+    let analysis = parseJson(text);
+    if (!analysis) {
+      // One repair turn: hand the broken output back and ask for valid JSON only.
+      message = await analysisRequest([
+        ...messages,
+        { role: "assistant", content: message.content.filter((b) => b.type === "text") },
+        { role: "user", content: "Javobing yaroqli JSON emas edi. Xuddi shu tahlilni sxemaga mos, faqat bitta to'g'ri JSON obyekt sifatida qaytar — boshqa matnsiz." },
+      ], "low");
+      text = textOf(message);
+      analysis = parseJson(text);
     }
+    if (!analysis) {
+      return res.status(502).json({ error: "Claude javobini o'qib bo'lmadi. Qayta urinib ko'ring.", raw: text.slice(0, 2000) });
+    }
+    analysis = normalizeAnalysis(analysis);
     res.json({ analysis, news, newsError, model: message.model });
   } catch (err) {
     if (err instanceof Anthropic.AuthenticationError) {

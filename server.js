@@ -202,7 +202,8 @@ Vazifang:
 7. Yakuniy reja uchun trade_plan.position ni (yuqoridagi kabi) to'ldir — pozitsiya qutisini sayt o'zi chizadi, shuning uchun Entry/SL/TP ni drawings'da qayta chizma. Umumiy "drawings" ga yakuniy rejani asoslovchi asosiy zonalarni (kind "zone": order block, FVG, supply/demand, diapazon / POC), muhim darajalarni (kind "hline") va kutilayotgan narx harakatini (kind "arrow") chiz. Boshqa rasmlarga ham asosiy darajalarni chizishing mumkin. Koordinatalar rasm o'lchamiga nisbatan 0 dan 1 gacha kasr: x=0 chap chet, x=1 o'ng chet, y=0 yuqori chet, y=1 pastki chet. Chiziqning y qiymatini grafikning o'ng tomonidagi narx shkalasiga qarab, narx aynan shu balandlikka to'g'ri keladigan qilib hisobla. image_index — rasm raqami (Rasm 1, Rasm 2...). hline uchun y2=y1; label uchun x2=x1, y2=y1.
 8. Yakuniy savdo rejasini strategiyalar konfluensiyasi (bir nechtasi bir xil yo'nalish va zonani ko'rsatishi) asosida tuz va qaysi strategiyalar uni qo'llab-quvvatlashini yoz.
 9. trade_plan'dagi *_price maydonlariga aniq raqam yoz (masalan 2662.5) — lot kalkulyatori shundan foydalanadi. Kirish zona bo'lsa, o'rtasini yoz. Narxni shkaladan o'qib bo'lmasa yoki signal WAIT bo'lsa, 0 yoz.
-10. Agar grafiklar aniq signal bermasa yoki timeframe'lar bir-biriga zid bo'lsa, "KUTISH" deb ayt — majburan savdo o'ylab topma.
+10. Rasmlar yangiligini tekshir: har bir grafikning vaqt shkalasidan oxirgi shamning sanasi/vaqtini o'qi va hozirgi vaqt bilan solishtir. Agar biror rasm eski bo'lsa (oxirgi sham timeframe'ga nisbatan juda oldin — masalan 15m grafikda bir necha soat, 4H/1D grafikda 1 kundan ko'p; dam olish kunlarida bozor yopiqligini hisobga ol) yoki rasmlar turli kunlarga tegishli bo'lsa, "freshness_warning" ga qaysi rasm va qancha eski ekanini yoz. Sana o'qib bo'lmasa, buni ham yoz. Hammasi yangi bo'lsa — bo'sh qator.
+11. Agar grafiklar aniq signal bermasa yoki timeframe'lar bir-biriga zid bo'lsa, "KUTISH" deb ayt — majburan savdo o'ylab topma.
 
 Qoidalar:
 - Faqat rasmda ko'rinadigan narsaga tayan. Narxlarni grafik shkalasidan o'qi; aniq o'qib bo'lmasa, taxminiy ekanini ayt.
@@ -335,11 +336,12 @@ const ANALYSIS_SCHEMA = {
     },
     confidence: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"] },
     risks: { type: "array", items: { type: "string" } },
+    freshness_warning: { type: "string" },
   },
   required: [
     "overall_bias", "summary", "timeframes", "strategies", "best_strategy",
     "best_strategy_reason", "market_reason", "news_impact", "drawings",
-    "supporting_strategies", "recommended_entry_timeframe",
+    "supporting_strategies", "recommended_entry_timeframe", "freshness_warning",
     "entry_timeframe_reason", "trade_plan", "confidence", "risks",
   ],
 };
@@ -442,6 +444,17 @@ app.get("/api/strategies", (req, res) => {
   res.json(Object.entries(STRATEGIES).map(([id, st]) => ({ id, label: st.label, rules: st.rules })));
 });
 
+// In-memory analysis jobs; finished jobs are dropped after 3 hours.
+const jobs = new Map();
+function createJob(images) {
+  const job = { id: crypto.randomUUID(), status: "running", startedAt: Date.now(), images };
+  jobs.set(job.id, job);
+  return job;
+}
+setInterval(() => {
+  for (const [id, job] of jobs) if (job.finishedAt && Date.now() - job.finishedAt > 3 * 3600e3) jobs.delete(id);
+}, 10 * 60e3).unref();
+
 // The schema is too large for constrained decoding, so it goes into the prompt and the reply is parsed and normalized.
 const ANALYSIS_SYSTEM = `${SYSTEM_PROMPT}
 
@@ -500,6 +513,7 @@ function normalizeAnalysis(a) {
     },
     confidence: str(a.confidence) || "LOW",
     risks: arr(a.risks).map(str),
+    freshness_warning: str(a.freshness_warning),
   };
 }
 
@@ -532,86 +546,96 @@ app.post("/api/analyze", async (req, res) => {
   content.push({
     type: "text",
     text:
+      `Hozirgi vaqt (UTC): ${new Date().toISOString().slice(0, 16).replace("T", " ")}.\n` +
       "Yuqoridagi XAU/USD grafiklarini tahlil qil va qaysi timeframe'da savdoga kirishni tavsiya qil.\n\n" +
       "Quyidagi strategiyalarning har birini alohida sinab ko'r:\n" +
       chosen.map((k, i) => `${i + 1}. ${STRATEGIES[k].label}\n` + STRATEGIES[k].rules.map((r) => `   - ${r}`).join("\n")).join("\n") +
       (note ? `\n\nTreyderning izohi: ${note}` : ""),
   });
 
-  const client = new Anthropic({ apiKey });
-  try {
-    let news = null;
-    let newsError = null;
-    if (useNews) {
-      try {
-        news = await fetchNewsBrief(client, new Date());
-        if (!news) newsError = "Yangiliklarni olib bo'lmadi.";
-        else if (news.calendarError) newsError = `${news.calendarError}. Yangiliklar faqat forexfactory.com qidiruvidan olindi.`;
-      } catch (err) {
-        if (err instanceof Anthropic.AuthenticationError) throw err;
-        newsError = `Yangiliklarni olib bo'lmadi: ${err.message}`;
-      }
-    }
-    content.push({
-      type: "text",
-      text: news
-        ? `Bugungi yangiliklar xulosasi (Forex Factory):\n${news.text}`
-        : "Yangiliklar ma'lumoti berilmagan — news_impact maydonida buni ayt va faqat texnik tahlilga tayan.",
-    });
-
-    const analysisRequest = (messages, effort) => client.beta.messages.stream({
-      model: MODEL,
-      max_tokens: 128000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      thinking: { type: "adaptive" },
-      output_config: { effort },
-      system: [{ type: "text", text: ANALYSIS_SYSTEM, cache_control: { type: "ephemeral" } }],
-      messages,
-    }).finalMessage();
-
-    const messages = [{ role: "user", content }];
-    let message = await analysisRequest(messages, process.env.ANALYSIS_EFFORT || "xhigh");
-    if (message.stop_reason === "refusal") {
-      return res.status(422).json({ error: "Claude bu so'rovni tahlil qilishdan bosh tortdi. Boshqa rasmlar bilan urinib ko'ring." });
-    }
-    if (message.stop_reason === "max_tokens") {
-      return res.status(502).json({ error: "Javob juda uzun bo'lib kesilib qoldi. Kamroq rasm yoki strategiya bilan urinib ko'ring." });
-    }
-    let text = textOf(message);
-    let analysis = parseJson(text);
-    if (!analysis) {
-      // One repair turn: hand the broken output back and ask for valid JSON only.
-      message = await analysisRequest([
-        ...messages,
-        { role: "assistant", content: message.content.filter((b) => b.type === "text") },
-        { role: "user", content: "Javobing yaroqli JSON emas edi. Xuddi shu tahlilni sxemaga mos, faqat bitta to'g'ri JSON obyekt sifatida qaytar — boshqa matnsiz." },
-      ], "low");
-      text = textOf(message);
-      analysis = parseJson(text);
-    }
-    if (!analysis) {
-      return res.status(502).json({ error: "Claude javobini o'qib bo'lmadi. Qayta urinib ko'ring.", raw: text.slice(0, 2000) });
-    }
-    analysis = normalizeAnalysis(analysis);
-    res.json({ analysis, news, newsError, model: message.model });
-  } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError) {
-      return res.status(502).json({ error: "Serverdagi API kalit noto'g'ri yoki muddati o'tgan (Render → Environment)." });
-    }
-    if (err instanceof Anthropic.RateLimitError) {
-      return res.status(429).json({ error: "So'rovlar limiti oshdi. Birozdan keyin qayta urinib ko'ring." });
-    }
-    if (err instanceof Anthropic.BadRequestError) {
-      return res.status(400).json({ error: `So'rov xatosi: ${err.message}` });
-    }
-    if (err instanceof Anthropic.APIError) {
-      return res.status(502).json({ error: `Claude API xatosi (${err.status ?? "?"}): ${err.message}` });
-    }
-    console.error(err);
-    res.status(500).json({ error: "Serverda kutilmagan xato yuz berdi." });
-  }
+  // Runs in the background so the analysis survives the browser tab going to sleep; the page polls /api/jobs/:id.
+  const job = createJob(images);
+  res.status(202).json({ jobId: job.id });
+  runAnalysis(content, Boolean(useNews))
+    .then((result) => Object.assign(job, { status: "done", result }))
+    .catch((err) => Object.assign(job, { status: "error", error: analysisErrorMessage(err) }))
+    .finally(() => { job.finishedAt = Date.now(); });
 });
+
+app.get("/api/jobs/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Tahlil topilmadi (server qayta ishga tushgan bo'lishi mumkin). Qayta tahlil qiling." });
+  const out = { status: job.status, startedAt: job.startedAt };
+  if (job.status === "done") Object.assign(out, job.result, { images: job.images });
+  if (job.status === "error") out.error = job.error;
+  res.json(out);
+});
+
+class AnalysisError extends Error {}
+
+function analysisErrorMessage(err) {
+  if (err instanceof AnalysisError) return err.message;
+  if (err instanceof Anthropic.AuthenticationError) return "Serverdagi API kalit noto'g'ri yoki muddati o'tgan (Render → Environment).";
+  if (err instanceof Anthropic.RateLimitError) return "So'rovlar limiti oshdi. Birozdan keyin qayta urinib ko'ring.";
+  if (err instanceof Anthropic.BadRequestError) return `So'rov xatosi: ${err.message}`;
+  if (err instanceof Anthropic.APIError) return `Claude API xatosi (${err.status ?? "?"}): ${err.message}`;
+  console.error(err);
+  return "Serverda kutilmagan xato yuz berdi.";
+}
+
+async function runAnalysis(content, useNews) {
+  const client = new Anthropic({ apiKey: API_KEY });
+  let news = null;
+  let newsError = null;
+  if (useNews) {
+    try {
+      news = await fetchNewsBrief(client, new Date());
+      if (!news) newsError = "Yangiliklarni olib bo'lmadi.";
+      else if (news.calendarError) newsError = `${news.calendarError}. Yangiliklar faqat forexfactory.com qidiruvidan olindi.`;
+    } catch (err) {
+      if (err instanceof Anthropic.AuthenticationError) throw err;
+      newsError = `Yangiliklarni olib bo'lmadi: ${err.message}`;
+    }
+  }
+  content.push({
+    type: "text",
+    text: news
+      ? `Bugungi yangiliklar xulosasi (Forex Factory):\n${news.text}`
+      : "Yangiliklar ma'lumoti berilmagan — news_impact maydonida buni ayt va faqat texnik tahlilga tayan.",
+  });
+
+  const analysisRequest = (messages, effort) => client.beta.messages.stream({
+    model: MODEL,
+    max_tokens: 128000,
+    betas: ["server-side-fallback-2026-07-01"],
+    fallbacks: "default",
+    thinking: { type: "adaptive" },
+    output_config: { effort },
+    system: [{ type: "text", text: ANALYSIS_SYSTEM, cache_control: { type: "ephemeral" } }],
+    messages,
+  }).finalMessage();
+
+  const messages = [{ role: "user", content }];
+  let message = await analysisRequest(messages, process.env.ANALYSIS_EFFORT || "xhigh");
+  if (message.stop_reason === "refusal") {
+    throw new AnalysisError("Claude bu so'rovni tahlil qilishdan bosh tortdi. Boshqa rasmlar bilan urinib ko'ring.");
+  }
+  if (message.stop_reason === "max_tokens") {
+    throw new AnalysisError("Javob juda uzun bo'lib kesilib qoldi. Kamroq rasm yoki strategiya bilan urinib ko'ring.");
+  }
+  let analysis = parseJson(textOf(message));
+  if (!analysis) {
+    // One repair turn: hand the broken output back and ask for valid JSON only.
+    message = await analysisRequest([
+      ...messages,
+      { role: "assistant", content: message.content.filter((b) => b.type === "text") },
+      { role: "user", content: "Javobing yaroqli JSON emas edi. Xuddi shu tahlilni sxemaga mos, faqat bitta to'g'ri JSON obyekt sifatida qaytar — boshqa matnsiz." },
+    ], "low");
+    analysis = parseJson(textOf(message));
+  }
+  if (!analysis) throw new AnalysisError("Claude javobini o'qib bo'lmadi. Qayta urinib ko'ring.");
+  return { analysis: normalizeAnalysis(analysis), news, newsError, model: message.model };
+}
 
 const CHAT_PROMPT = `Sen XAU Smart Trade platformasining AI yordamchisisan va admin (treyder) bilan o'zbek tilida gaplashasan.
 Mutaxassisliging: XAU/USD (oltin) texnik tahlili, Volume Profile, SMC/ICT, price action, risk-menejment, fundamental omillar (Fed, CPI, NFP, DXY).

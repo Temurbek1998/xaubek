@@ -115,6 +115,10 @@ document.addEventListener("paste", (e) => {
     .forEach((it) => (onChat ? addChatFile : addFile)(it.getAsFile()));
 });
 
+// Analyses run as server-side jobs: the page can sleep or reload and still pick up the result.
+const JOB_KEY = "xau_job";
+let pollTimer = null;
+
 $("analyze").onclick = async () => {
   const strategies = selectedStrategies();
   if (strategies.length === 0) return alertMsg("Kamida bitta strategiyani tanlang.");
@@ -123,7 +127,7 @@ $("analyze").onclick = async () => {
   const useNews = $("useNews").checked;
   $("analyze").disabled = true;
   showResultCard();
-  $("result").innerHTML = `<p><span class="spinner"></span>Claude ${sorted.length} ta grafikni ${strategies.length} ta strategiya bo'yicha tahlil qilmoqda${useNews ? ", kun yangiliklarini qidirmoqda" : ""}... (1–4 daqiqa)</p>`;
+  $("result").innerHTML = `<p><span class="spinner"></span>Yuborilmoqda...</p>`;
   try {
     const res = await api("/api/analyze", {
       method: "POST",
@@ -137,14 +141,57 @@ $("analyze").onclick = async () => {
     });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || `Xato ${res.status}`);
-    lastAnalysis = body.analysis;
-    showResult(body.analysis, body, sorted);
+    try { localStorage.setItem(JOB_KEY, JSON.stringify({ id: body.jobId, n: sorted.length, s: strategies.length, news: useNews })); } catch {}
+    pollJob();
   } catch (err) {
     alertMsg(err.message);
-  } finally {
     $("analyze").disabled = images.length === 0;
   }
 };
+
+function savedJob() { try { return JSON.parse(localStorage.getItem(JOB_KEY)); } catch { return null; } }
+
+async function pollJob(quietIfMissing = false) {
+  clearTimeout(pollTimer);
+  const job = savedJob();
+  if (!job) return;
+  let body;
+  try {
+    const res = await api(`/api/jobs/${encodeURIComponent(job.id)}`);
+    body = await res.json();
+    if (res.status === 404) {
+      try { localStorage.removeItem(JOB_KEY); } catch {}
+      if (!quietIfMissing) alertMsg(body.error);
+      $("analyze").disabled = images.length === 0;
+      return;
+    }
+    if (!res.ok) throw new Error(body.error || `Xato ${res.status}`);
+  } catch (err) {
+    // Network hiccup (e.g. the phone woke up): keep trying.
+    pollTimer = setTimeout(pollJob, 5000);
+    return;
+  }
+  if (body.status === "running") {
+    showResultCard();
+    const mins = Math.floor((Date.now() - body.startedAt) / 60000), secs = Math.floor((Date.now() - body.startedAt) / 1000) % 60;
+    $("result").innerHTML = `<p><span class="spinner"></span>Claude ${job.n} ta grafikni ${job.s} ta strategiya bo'yicha tahlil qilmoqda${job.news ? " va Forex Factory yangiliklarini o'qimoqda" : ""}... <b>${mins}:${String(secs).padStart(2, "0")}</b></p>
+      <p class="hint">Tahlil serverda ishlayapti — saytdan chiqib, keyin qaytsangiz ham natija shu yerda chiqadi. Odatda 2–5 daqiqa.</p>`;
+    $("analyze").disabled = true;
+    pollTimer = setTimeout(pollJob, 4000);
+    return;
+  }
+  $("analyze").disabled = images.length === 0;
+  if (body.status === "error") {
+    try { localStorage.removeItem(JOB_KEY); } catch {}
+    return alertMsg(body.error);
+  }
+  const sent = (body.images || []).map((i) => ({ ...i, url: `data:${i.mediaType};base64,${i.data}` }));
+  lastAnalysis = body.analysis;
+  showResultCard();
+  showResult(body.analysis, body, sent);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && savedJob()) pollJob(true); });
+pollJob(true);
 
 const LABELS = { BULLISH: "Ko'tarilish", BEARISH: "Tushish", NEUTRAL: "Neytral", RANGE: "Flet", BUY: "BUY", SELL: "SELL", WAIT: "KUTISH",
   LOW: "Past", MEDIUM: "O'rta", HIGH: "Yuqori" };
@@ -325,6 +372,7 @@ function showResult(a, body, sent) {
   const p = a.trade_plan;
   const news = body.news;
   $("result").innerHTML = `
+    ${a.freshness_warning ? `<div class="stale">⚠️ <b>Rasm eski bo'lishi mumkin:</b> ${esc(a.freshness_warning)}<br><small>Yangi skrinshot oling va qayta tahlil qiling.</small></div>` : ""}
     <div class="verdict">Umumiy yo'nalish: ${badge(a.overall_bias)} · Savdo: ${badge(p.direction)} · Ishonch: ${badge(a.confidence)}</div>
     <p>${esc(a.summary)}</p>
     <div class="entry-tf">

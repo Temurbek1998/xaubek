@@ -80,7 +80,7 @@ const LIVE = { w: 1280, h: 720, top: 46, bottom: 44, left: 12, right: 86 };
 
 function renderLiveChart(tf, all) {
   // The image shows the latest 160 candles (readable); Claude also gets all ~300 as OHLC numbers.
-  const candles = all.slice(-160);
+  const candles = all.slice(-140);
   const { w, h } = LIVE;
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
@@ -91,7 +91,7 @@ function renderLiveChart(tf, all) {
   max = +(max + pad).toFixed(2); min = +(min - pad).toFixed(2);
   const yOf = (p) => pTop + ((max - p) / (max - min)) * (pBot - pTop);
   // Empty space on the right (like TradingView) leaves room for the position box and projected moves.
-  const step = (pR - pL) / (candles.length + 24);
+  const step = (pR - pL) / (candles.length + 40);
   const xOf = (i) => pL + step * (i + 0.5);
 
   ctx.fillStyle = "#131722"; ctx.fillRect(0, 0, w, h);
@@ -136,7 +136,7 @@ function renderLiveChart(tf, all) {
   const url = canvas.toDataURL("image/png");
   return {
     mediaType: "image/png", data: url.split(",")[1], url, timeframe: tf, live: true,
-    scale: { top: pTop / h, bottom: pBot / h, max, min, left: xOf(0) / w, right: xOf(candles.length - 1) / w, count: candles.length },
+    scale: { top: pTop / h, bottom: pBot / h, max, min, left: xOf(0) / w, right: xOf(candles.length - 1) / w, count: candles.length, last: last.c },
     ohlc: all.map((c) => `${c.t.slice(0, 16)},${c.o.toFixed(2)},${c.h.toFixed(2)},${c.l.toFixed(2)},${c.c.toFixed(2)}`).join("\n"),
   };
 }
@@ -315,7 +315,7 @@ const COLORS = { green: "#2ea043", red: "#f85149", gold: "#d4a72c", blue: "#388b
 const clamp01 = (v) => Math.max(0, Math.min(1, +v || 0));
 
 // Draws Claude's annotations (coordinates are 0..1 fractions of the image) onto a canvas.
-function drawChart(canvas, img, drawings, plan) {
+function drawChart(canvas, img, drawings, plan, meta) {
   const w = img.naturalWidth, h = img.naturalHeight;
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d");
@@ -360,6 +360,89 @@ function drawChart(canvas, img, drawings, plan) {
     }
   }
   if (plan) drawPosition(ctx, w, h, lw, fs, tag, plan);
+  if (plan && plan.forecast) drawForecast(ctx, w, h, lw, fs, tag, plan, meta || {});
+}
+
+// Projected price path after the last candle: main scenario (gold), alternative (grey dashed), invalidation line and a summary box.
+function drawForecast(ctx, w, h, lw, fs, tag, plan, meta) {
+  const f = plan.forecast, pos = plan.position || {}, pr = plan.prices, sc = meta.scale;
+  if (!f.main_path?.length) return;
+  let yOf;
+  if (sc) yOf = (p) => (sc.top + ((sc.max - p) / (sc.max - sc.min)) * (sc.bottom - sc.top)) * h;
+  else if (pr.entry > 0 && pr.sl > 0 && pr.entry !== pr.sl && pos.y_entry > 0 && pos.y_sl > 0) {
+    const k = (pos.y_sl - pos.y_entry) / (pr.sl - pr.entry);
+    yOf = (p) => (pos.y_entry + (p - pr.entry) * k) * h;
+  } else return;
+  const yc = (p) => Math.max(fs, Math.min(h - fs, yOf(p)));
+  const maxBars = Math.max(...f.main_path.concat(f.alt_path || []).map((p) => p.bars_ahead));
+  const x0 = sc ? sc.right : clamp01(pos.x1 || 0.75);
+  const barW = sc ? Math.min((sc.right - sc.left) / (sc.count - 1), (0.985 - x0) / maxBars) : (0.98 - x0) / maxBars;
+  const xOf = (bars) => (x0 + bars * barW) * w;
+  const start = sc?.last > 0 ? sc.last : f.main_path[0].price;
+
+  // Smooth curve through the points (Catmull-Rom as Bezier segments).
+  const curve = (points, color, width, dash) => {
+    const pts = [{ x: xOf(0), y: yc(start) }, ...points.map((p) => ({ x: xOf(p.bars_ahead), y: yc(p.price) }))];
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash); ctx.lineJoin = ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+      ctx.bezierCurveTo(p1.x + (p2.x - p0.x) / 6, p1.y + (p2.y - p0.y) / 6, p2.x - (p3.x - p1.x) / 6, p2.y - (p3.y - p1.y) / 6, p2.x, p2.y);
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  };
+  // "Now" marker.
+  ctx.strokeStyle = "#787b86"; ctx.lineWidth = 1; ctx.setLineDash([2, 4]);
+  ctx.beginPath(); ctx.moveTo(xOf(0), 0); ctx.lineTo(xOf(0), h); ctx.stroke(); ctx.setLineDash([]);
+  // Invalidation level.
+  if (f.invalidation_price > 0) {
+    const y = yc(f.invalidation_price);
+    ctx.strokeStyle = "#ff9800"; ctx.lineWidth = lw; ctx.setLineDash([lw * 5, lw * 3]);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); ctx.setLineDash([]);
+    tag(`Bekor qilish ${(+f.invalidation_price).toFixed(2)}`, fs * 0.5, y, "#ff9800");
+  }
+  if (f.alt_path?.length) curve(f.alt_path, "#9598a1", lw * 1.3, [lw * 4, lw * 3]);
+  curve(f.main_path, "#f5c518", lw * 2.2, []);
+  ctx.fillStyle = "#f5c518"; ctx.beginPath(); ctx.arc(xOf(0), yc(start), lw * 3, 0, 7); ctx.fill();
+  tag(`HOZIR ${(+start).toFixed(2)}`, xOf(0) - fs * 9, yc(start) + fs * 1.4, "#f5c518");
+
+  // Summary box (bottom left) and legend (bottom right).
+  const n = (v) => (v > 0 ? (+v).toFixed(2).replace(/\.?0+$/, "") : "—");
+  const rr = (t) => (pr.entry > 0 && pr.sl > 0 && t > 0 && pr.entry !== pr.sl ? (Math.abs(t - pr.entry) / Math.abs(pr.entry - pr.sl)).toFixed(1) : "—");
+  const lines = [
+    `${plan.direction} @ ${n(pr.entry)}   SL ${n(pr.sl)}   TP1 ${n(pr.tp1)}   TP2 ${n(pr.tp2)}`,
+    `R:R  1:${rr(pr.tp1)} / 1:${rr(pr.tp2)}`,
+    ...(f.invalidation_text ? [`BEKOR: ${f.invalidation_text}`] : []),
+  ];
+  const legend = [["#f5c518", f.main_label || "Asosiy ssenariy", false], ...(f.alt_path?.length ? [["#9598a1", f.alt_label || "Muqobil ssenariy", true]] : [])];
+  const sfs = Math.round(fs * 0.85);
+  ctx.font = `600 ${sfs}px ui-monospace, Menlo, monospace`;
+  const wrap = (text, max) => {
+    const out = []; let cur = "";
+    for (const word of text.split(" ")) {
+      const t = cur ? cur + " " + word : word;
+      if (ctx.measureText(t).width > max && cur) { out.push(cur); cur = word; } else cur = t;
+    }
+    return cur ? out.concat(cur) : out;
+  };
+  const boxW = Math.min(w * 0.5, Math.max(...lines.map((l) => ctx.measureText(l).width)) + sfs * 2);
+  const all = lines.flatMap((l) => wrap(l, boxW - sfs * 2));
+  const lh = sfs * 1.45, boxH = all.length * lh + sfs * 1.2, bx = sfs, by = h - boxH - sfs * 2.6;
+  ctx.fillStyle = "rgba(19,23,34,.92)"; ctx.fillRect(bx, by, boxW, boxH);
+  ctx.strokeStyle = "#f5c518"; ctx.lineWidth = Math.max(1.5, lw * 0.7); ctx.strokeRect(bx, by, boxW, boxH);
+  ctx.fillStyle = "#e6edf3"; ctx.textBaseline = "middle";
+  all.forEach((l, i) => ctx.fillText(l, bx + sfs, by + sfs * 0.6 + lh * (i + 0.5)));
+  ctx.font = `${sfs}px system-ui, sans-serif`;
+  const legW = Math.min(w * 0.45, Math.max(...legend.map(([, t]) => ctx.measureText(t).width)) + sfs * 5);
+  const lx = w - legW - sfs * 6, ly = h - legend.length * lh - sfs * 3;
+  ctx.fillStyle = "rgba(19,23,34,.88)"; ctx.fillRect(lx, ly, legW, legend.length * lh + sfs * 0.6);
+  legend.forEach(([c, t, dash], i) => {
+    const y = ly + sfs * 0.3 + lh * (i + 0.5);
+    ctx.strokeStyle = c; ctx.lineWidth = lw * 1.6; ctx.setLineDash(dash ? [lw * 3, lw * 2] : []);
+    ctx.beginPath(); ctx.moveTo(lx + sfs * 0.6, y); ctx.lineTo(lx + sfs * 2.8, y); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = "#d1d4dc"; ctx.fillText(t.length > 60 ? t.slice(0, 58) + "…" : t, lx + sfs * 3.4, y);
+  });
+  ctx.font = `bold ${fs}px system-ui, sans-serif`;
 }
 
 // TradingView-style position box: green from entry to TP, red from entry to SL, with prices and distances.
@@ -400,7 +483,7 @@ function plansOf(a) {
   const p = a.trade_plan;
   const plans = [{
     key: "final", name: "Yakuniy reja", direction: p.direction, timeframe: a.recommended_entry_timeframe,
-    drawings: a.drawings || [], position: p.position,
+    drawings: a.drawings || [], position: p.position, forecast: p.forecast,
     prices: { entry: p.entry_price, sl: p.stop_loss_price, tp1: p.take_profit_1_price, tp2: p.take_profit_2_price },
   }];
   [...a.strategies].sort((x, y) => y.score - x.score).forEach((st, i) => plans.push({
@@ -433,7 +516,7 @@ async function downloadAllPlans(a, sent) {
     const img = sent[idx - 1];
     if (!img) continue;
     const canvas = document.createElement("canvas");
-    drawChart(canvas, await load(img.url), plan.drawings.filter((d) => d.image_index === idx), pos.image_index === idx ? plan : null);
+    drawChart(canvas, await load(img.url), plan.drawings.filter((d) => d.image_index === idx), pos.image_index === idx ? plan : null, img);
     const a2 = document.createElement("a");
     a2.download = `${String(++n).padStart(2, "0")}_XAUUSD_${img.timeframe}_${plan.name.split(/[ (:]/)[0]}.png`.replace(/[^\w.\-]/g, "_");
     a2.href = canvas.toDataURL("image/png");
@@ -475,7 +558,7 @@ function renderCharts(plan, sent, a) {
     const el = new Image();
     el.onload = () => {
       const canvas = fig.querySelector("canvas");
-      drawChart(canvas, el, drawings, hasPos ? plan : null);
+      drawChart(canvas, el, drawings, hasPos ? plan : null, img);
       fig.querySelector("a").href = canvas.toDataURL("image/png");
     };
     el.src = img.url;

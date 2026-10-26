@@ -273,6 +273,7 @@ Vazifang:
 9. trade_plan'dagi *_price maydonlariga aniq raqam yoz (masalan 2662.5) — lot kalkulyatori shundan foydalanadi. Kirish zona bo'lsa, o'rtasini yoz. Narxni shkaladan o'qib bo'lmasa yoki signal WAIT bo'lsa, 0 yoz.
 10. Rasmlar yangiligini tekshir: har bir grafikning vaqt shkalasidan oxirgi shamning sanasi/vaqtini o'qi va hozirgi vaqt bilan solishtir. Agar biror rasm eski bo'lsa (oxirgi sham timeframe'ga nisbatan juda oldin — masalan 15m grafikda bir necha soat, 4H/1D grafikda 1 kundan ko'p; dam olish kunlarida bozor yopiqligini hisobga ol) yoki rasmlar turli kunlarga tegishli bo'lsa, "freshness_warning" ga qaysi rasm va qancha eski ekanini yoz. Sana o'qib bo'lmasa, buni ham yoz. Hammasi yangi bo'lsa — bo'sh qator.
 11. Agar grafiklar aniq signal bermasa yoki timeframe'lar bir-biriga zid bo'lsa, "KUTISH" deb ayt — majburan savdo o'ylab topma.
+12. PROGNOZ YO'LI (trade_plan.forecast): yakuniy reja timeframe'ida (trade_plan.position.image_index dagi rasm) narx keyingi shamlarda qanday yurishini bashorat qil. main_path — asosiy ssenariy: 5–10 ta nuqta, bars_ahead = oxirgi shamdan keyingi sham soni (1 dan 36 gacha, o'sib boruvchi), price = o'sha paytdagi narx. Yo'l realistik bo'lsin: avval kirish zonasiga qaytish (retest), keyin TP1 va TP2 tomon to'lqinsimon harakat — to'g'ri chiziq emas. alt_path — muqobil ssenariy (rejа buzilsa narx qayerga ketadi), 4–8 nuqta. main_label/alt_label — qisqa izoh (masalan "Asosiy: retestdan keyin pastga, ehtimoli yuqori"). invalidation_price — reja bekor bo'ladigan narx, invalidation_text — shart (masalan "M15 sham 4029 dan yuqorida yopilsa").
 
 Qoidalar:
 - Faqat rasmda ko'rinadigan narsaga tayan. Narxlarni grafik shkalasidan o'qi; aniq o'qib bo'lmasa, taxminiy ekanini ayt.
@@ -316,6 +317,30 @@ const POSITION_SCHEMA = {
     y_tp2: { type: "number" },
   },
   required: ["image_index", "x1", "x2", "y_entry", "y_sl", "y_tp1", "y_tp2"],
+};
+
+// Projected price path drawn after the last candle: the main scenario and the alternative one.
+const PATH_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    properties: { bars_ahead: { type: "integer" }, price: { type: "number" } },
+    required: ["bars_ahead", "price"],
+  },
+};
+const FORECAST_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    main_label: { type: "string" },
+    main_path: PATH_SCHEMA,
+    alt_label: { type: "string" },
+    alt_path: PATH_SCHEMA,
+    invalidation_price: { type: "number" },
+    invalidation_text: { type: "string" },
+  },
+  required: ["main_label", "main_path", "alt_label", "alt_path", "invalidation_price", "invalidation_text"],
 };
 
 const ANALYSIS_SCHEMA = {
@@ -398,11 +423,12 @@ const ANALYSIS_SCHEMA = {
         take_profit_1_price: { type: "number" },
         take_profit_2_price: { type: "number" },
         position: POSITION_SCHEMA,
+        forecast: FORECAST_SCHEMA,
       },
       required: [
         "direction", "entry", "stop_loss", "take_profit_1", "take_profit_2",
         "risk_reward", "confirmation", "invalidation",
-        "entry_price", "stop_loss_price", "take_profit_1_price", "take_profit_2_price", "position",
+        "entry_price", "stop_loss_price", "take_profit_1_price", "take_profit_2_price", "position", "forecast",
       ],
     },
     confidence: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"] },
@@ -564,6 +590,8 @@ function normalizeAnalysis(a) {
     price1: num(x?.price1), price2: num(x?.price2),
   }));
   const tp = a.trade_plan || {};
+  const path = (p) => arr(p).map((x) => ({ bars_ahead: num(x?.bars_ahead), price: num(x?.price) }))
+    .filter((x) => x.bars_ahead > 0 && x.price > 0).sort((x, y) => x.bars_ahead - y.bars_ahead);
   return {
     overall_bias: str(a.overall_bias) || "NEUTRAL",
     summary: str(a.summary),
@@ -590,6 +618,11 @@ function normalizeAnalysis(a) {
       entry_price: num(tp.entry_price), stop_loss_price: num(tp.stop_loss_price),
       take_profit_1_price: num(tp.take_profit_1_price), take_profit_2_price: num(tp.take_profit_2_price),
       position: pos(tp.position),
+      forecast: {
+        main_label: str(tp.forecast?.main_label), alt_label: str(tp.forecast?.alt_label),
+        main_path: path(tp.forecast?.main_path), alt_path: path(tp.forecast?.alt_path),
+        invalidation_price: num(tp.forecast?.invalidation_price), invalidation_text: str(tp.forecast?.invalidation_text),
+      },
     },
     confidence: str(a.confidence) || "LOW",
     risks: arr(a.risks).map(str),

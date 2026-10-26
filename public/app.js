@@ -154,7 +154,7 @@ const COLORS = { green: "#2ea043", red: "#f85149", gold: "#d4a72c", blue: "#388b
 const clamp01 = (v) => Math.max(0, Math.min(1, +v || 0));
 
 // Draws Claude's annotations (coordinates are 0..1 fractions of the image) onto a canvas.
-function drawChart(canvas, img, drawings) {
+function drawChart(canvas, img, drawings, plan) {
   const w = img.naturalWidth, h = img.naturalHeight;
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext("2d");
@@ -198,25 +198,123 @@ function drawChart(canvas, img, drawings) {
       tag(d.label, x1, y1, c);
     }
   }
+  if (plan) drawPosition(ctx, w, h, lw, fs, tag, plan);
 }
 
-function renderCharts(a, sent) {
+// TradingView-style position box: green from entry to TP, red from entry to SL, with prices and distances.
+function drawPosition(ctx, w, h, lw, fs, tag, plan) {
+  const pos = plan.position;
+  const pr = plan.prices;
+  if (!pos || !(pos.y_entry > 0) || !(pos.y_sl > 0) || !(pos.y_tp1 > 0)) return;
+  const xa = clamp01(pos.x1) * w;
+  const xb = Math.max(xa + w * 0.08, clamp01(pos.x2 || 1) * w);
+  const yE = clamp01(pos.y_entry) * h, yS = clamp01(pos.y_sl) * h, yT1 = clamp01(pos.y_tp1) * h;
+  const yT = pos.y_tp2 > 0 ? clamp01(pos.y_tp2) * h : yT1;
+  const box = (y1, y2, fill, stroke) => {
+    ctx.fillStyle = fill; ctx.fillRect(xa, Math.min(y1, y2), xb - xa, Math.abs(y2 - y1));
+    ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.setLineDash([]);
+    ctx.strokeRect(xa, Math.min(y1, y2), xb - xa, Math.abs(y2 - y1));
+  };
+  box(yE, yT, "rgba(8,153,129,.28)", "#089981");
+  box(yE, yS, "rgba(242,54,69,.28)", "#f23645");
+  const line = (y, color, dash) => {
+    ctx.strokeStyle = color; ctx.lineWidth = lw * (dash ? 1 : 1.6); ctx.setLineDash(dash ? [lw * 4, lw * 3] : []);
+    ctx.beginPath(); ctx.moveTo(xa, y); ctx.lineTo(xb, y); ctx.stroke(); ctx.setLineDash([]);
+  };
+  if (yT !== yT1) line(yT1, "#089981", true);
+  line(yE, "#e6edf3", false);
+  const num = (v) => (v > 0 ? (+v).toFixed(2).replace(/\.?0+$/, "") : "");
+  const diff = (v) => (v > 0 && pr.entry > 0 ? ` (${v > pr.entry ? "+" : "−"}${Math.abs(v - pr.entry).toFixed(2)})` : "");
+  const right = (text, y, color) => tag(text, xb - ctx.measureText(text).width - fs * 0.9, y, color);
+  const dir = plan.direction === "SELL" ? "SHORT" : plan.direction === "BUY" ? "LONG" : "LIMIT";
+  right(`Entry ${num(pr.entry)} · ${dir}`, yE, "#e6edf3");
+  right(`SL ${num(pr.sl)}${diff(pr.sl)}`, yS + (yS > yE ? -fs * 0.8 : fs * 0.8), "#f23645");
+  right(`TP1 ${num(pr.tp1)}${diff(pr.tp1)}`, yT1 + (yT1 < yE ? fs * 0.8 : -fs * 0.8), "#089981");
+  if (yT !== yT1) right(`TP2 ${num(pr.tp2)}${diff(pr.tp2)}`, yT + (yT < yE ? fs * 0.8 : -fs * 0.8), "#089981");
+  if (plan.name) tag(plan.name, xa + 4, Math.min(yT, yS, yE) - fs * 1.1, "#2962ff");
+}
+
+// One "plan" = the final plan or one strategy's plan: its own drawings, position box and prices.
+function plansOf(a) {
+  const p = a.trade_plan;
+  const plans = [{
+    key: "final", name: "Yakuniy reja", direction: p.direction, timeframe: a.recommended_entry_timeframe,
+    drawings: a.drawings || [], position: p.position,
+    prices: { entry: p.entry_price, sl: p.stop_loss_price, tp1: p.take_profit_1_price, tp2: p.take_profit_2_price },
+  }];
+  [...a.strategies].sort((x, y) => y.score - x.score).forEach((st, i) => plans.push({
+    key: "s" + i, name: st.strategy, direction: st.signal, timeframe: st.timeframe, score: st.score,
+    drawings: st.drawings || [], position: st.position,
+    prices: { entry: st.entry_price, sl: st.stop_loss_price, tp1: st.take_profit_1_price, tp2: st.take_profit_2_price },
+  }));
+  return plans;
+}
+
+function renderPlanPicker(a, sent) {
+  const plans = plansOf(a);
+  $("planPick").innerHTML = plans.map((pl) => `
+    <button data-k="${pl.key}" class="${pl.key === "final" ? "on" : ""}">${pl.key === "final" ? "⭐ " : ""}${esc(pl.name.split(" (")[0].split(":")[0])}
+      ${pl.key === "final" ? "" : badge(pl.direction)}</button>`).join("");
+  $("planPick").querySelectorAll("button").forEach((b) => (b.onclick = () => {
+    $("planPick").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+    renderCharts(plans.find((pl) => pl.key === b.dataset.k), sent, a);
+  }));
+  renderCharts(plans[0], sent, a);
+}
+// Renders every plan onto its main image off-screen and downloads one PNG per plan.
+async function downloadAllPlans(a, sent) {
+  const load = (url) => new Promise((ok) => { const im = new Image(); im.onload = () => ok(im); im.src = url; });
+  let n = 0;
+  for (const plan of plansOf(a)) {
+    const pos = plan.position || {};
+    let idx = pos.image_index > 0 && pos.y_entry > 0 ? pos.image_index : 0;
+    if (!idx) idx = (plan.drawings[0] || {}).image_index || 0;
+    const img = sent[idx - 1];
+    if (!img) continue;
+    const canvas = document.createElement("canvas");
+    drawChart(canvas, await load(img.url), plan.drawings.filter((d) => d.image_index === idx), pos.image_index === idx ? plan : null);
+    const a2 = document.createElement("a");
+    a2.download = `${String(++n).padStart(2, "0")}_XAUUSD_${img.timeframe}_${plan.name.split(/[ (:]/)[0]}.png`.replace(/[^\w.\-]/g, "_");
+    a2.href = canvas.toDataURL("image/png");
+    document.body.appendChild(a2); a2.click(); a2.remove();
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  return n;
+}
+
+function showPlan(key) {
+  const b = $("planPick").querySelector(`button[data-k="${key}"]`);
+  if (b) { b.click(); $("planPick").scrollIntoView({ behavior: "smooth", block: "start" }); }
+}
+
+function renderCharts(plan, sent, a) {
   const box = $("charts");
-  const byImage = sent.map((img, i) => ({ img, i, drawings: (a.drawings || []).filter((d) => d.image_index === i + 1) }))
-    .filter((x) => x.drawings.length);
-  // Show the recommended entry timeframe first.
-  byImage.sort((x, y) => (y.img.timeframe === a.recommended_entry_timeframe) - (x.img.timeframe === a.recommended_entry_timeframe));
-  if (!byImage.length) { box.innerHTML = `<p class="hint">Chizmalar qaytarilmadi.</p>`; return; }
-  box.innerHTML = "";
-  for (const { img, i, drawings } of byImage) {
+  const pos = plan.position || {};
+  const byImage = sent.map((img, i) => ({
+    img, i,
+    drawings: plan.drawings.filter((d) => d.image_index === i + 1),
+    hasPos: pos.image_index === i + 1 && pos.y_entry > 0,
+  })).filter((x) => x.drawings.length || x.hasPos);
+  // Images with the position box first, then the plan's own timeframe.
+  byImage.sort((x, y) => (y.hasPos - x.hasPos) || ((y.img.timeframe === plan.timeframe) - (x.img.timeframe === plan.timeframe)));
+  const pr = plan.prices;
+  const head = pr.entry > 0
+    ? `<div class="plan mini"><div><small>Kirish</small>${pr.entry}</div><div><small>Stop Loss</small><span class="neg">${pr.sl || "—"}</span></div>
+       <div><small>TP1</small><span class="pos">${pr.tp1 || "—"}</span></div><div><small>TP2</small><span class="pos">${pr.tp2 || "—"}</span></div>
+       <div><small>R:R (TP1)</small>${pr.sl && pr.tp1 && pr.entry !== pr.sl ? "1 : " + (Math.abs(pr.tp1 - pr.entry) / Math.abs(pr.entry - pr.sl)).toFixed(2) : "—"}</div></div>`
+    : `<p class="hint">${esc(plan.name)}: hozircha bu strategiya bo'yicha setup yo'q — kirish nuqtasi berilmagan.</p>`;
+  if (!byImage.length) { box.innerHTML = head + `<p class="hint">Bu reja uchun chizma qaytarilmadi.</p>`; return; }
+  box.innerHTML = head;
+  for (const { img, i, drawings, hasPos } of byImage) {
     const fig = document.createElement("div");
     fig.className = "chart";
-    fig.innerHTML = `<figure><figcaption><span>${esc(img.timeframe)} — Rasm ${i + 1}</span><a href="#" download="XAUUSD_${esc(img.timeframe)}_tahlil.png">PNG yuklab olish</a></figcaption><canvas></canvas></figure>`;
+    const fname = `XAUUSD_${img.timeframe}_${plan.name.split(" ")[0]}.png`.replace(/[^\w.\-]/g, "_");
+    fig.innerHTML = `<figure><figcaption><span>${esc(img.timeframe)} — Rasm ${i + 1}</span><a href="#" download="${esc(fname)}">PNG yuklab olish</a></figcaption><canvas></canvas></figure>`;
     box.appendChild(fig);
     const el = new Image();
     el.onload = () => {
       const canvas = fig.querySelector("canvas");
-      drawChart(canvas, el, drawings);
+      drawChart(canvas, el, drawings, hasPos ? plan : null);
       fig.querySelector("a").href = canvas.toDataURL("image/png");
     };
     el.src = img.url;
@@ -235,7 +333,9 @@ function showResult(a, body, sent) {
       <p>${esc(a.entry_timeframe_reason)}</p>
     </div>
     <h3>Grafikda chizilgan reja</h3>
-    <p class="hint">Chiziqlar AI tomonidan rasmdagi narx shkalasiga qarab taxminan joylashtirilgan — aniq narxlar uchun "Savdo rejasi" raqamlariga qarang.</p>
+    <p class="hint">Strategiyani tanlang — uning zonalari, kirish nuqtasi va TP/SL qayerdan qayergacha ekani rasmingiz ustida ko'rsatiladi. Chiziqlar narx shkalasiga qarab taxminan joylashadi, aniq narxlar yuqorida.</p>
+    <div id="planPick" class="plan-pick"></div>
+    <button id="dlAll" class="secondary" style="margin-bottom:10px">📥 Barcha strategiyalar chizmalarini yuklab olish</button>
     <div id="charts" class="charts"></div>
     <h3>Bozor nima uchun shunday harakatlanmoqda</h3>
     <p>${esc(a.market_reason)}</p>
@@ -258,6 +358,8 @@ function showResult(a, body, sent) {
             <span class="muted">${met}/${total} qoida</span>
           </summary>
           <p>${esc(st.reasoning)}</p>
+          ${+st.entry_price > 0 ? `<p class="strat-prices">Kirish <b>${st.entry_price}</b> · SL <b class="neg">${st.stop_loss_price}</b> · TP1 <b class="pos">${st.take_profit_1_price}</b>${+st.take_profit_2_price > 0 ? ` · TP2 <b class="pos">${st.take_profit_2_price}</b>` : ""}</p>` : ""}
+          <button class="secondary show-plan" data-name="${esc(st.strategy)}">🖼 Rasmda ko'rish</button>
           <ul class="checks">${(st.checks || []).map((c) => `<li class="${c.met ? "ok" : "no"}"><span>${c.met ? "✓" : "✗"}</span><div><b>${esc(c.rule)}</b><br><small>${esc(c.evidence)}</small></div></li>`).join("")}</ul>
         </details>`;
       }).join("")}
@@ -287,7 +389,19 @@ function showResult(a, body, sent) {
     </table></div>
     <h3>Risklar</h3>
     <ul>${a.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`;
-  renderCharts(a, sent);
+  renderPlanPicker(a, sent);
+  $("dlAll").onclick = async () => {
+    $("dlAll").disabled = true;
+    const n = await downloadAllPlans(a, sent);
+    $("dlAll").disabled = false;
+    $("dlAll").textContent = `📥 ${n} ta chizma yuklab olindi — yana yuklash`;
+  };
+  const plans = plansOf(a);
+  $("result").querySelectorAll(".show-plan").forEach((b) => (b.onclick = (e) => {
+    e.preventDefault();
+    const pl = plans.find((x) => x.name === b.dataset.name);
+    if (pl) showPlan(pl.key);
+  }));
   $("calc").oninput = updateCalc;
   updateCalc();
   const bar = document.createElement("div");

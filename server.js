@@ -194,8 +194,12 @@ Vazifang:
 3. Qaysi timeframe'da kirish (entry) eng mantiqiy ekanini tanla va nima uchun ekanini tushuntir.
 4. Aniq savdo rejasini ber: yo'nalish (BUY/SELL yoki KUTISH), kirish narxi yoki zonasi, Stop Loss, Take Profit 1/2, risk/reward nisbati, kirishni tasdiqlovchi signal va rejani bekor qiluvchi holat.
 5. Foydalanuvchi tanlagan HAR BIR strategiyani alohida sinab ko'r. Har bir strategiyaning qoidalarini BITTA-BITTA tekshir va "checks" maydoniga yoz: qoida bajarilganmi (met: true/false) va grafikda buni nimadan ko'rganing (evidence) — aniq narx, sham, joy. Ko'rmagan narsangni bajarilgan deb belgilama. Ball bajarilgan qoidalar ulushiga mos bo'lsin; muhim qoida bajarilmasa signal "WAIT" bo'lsin. Shundan keyin: shu strategiya qoidalari bo'yicha hozir signal bormi, qaysi yo'nalishda, qaysi timeframe'da, va 0–100 ball bilan qanchalik mos ekanini bahola. Agar strategiya uchun kerakli ma'lumot grafikda bo'lmasa (masalan, RSI indikatori qo'yilmagan), buni ochiq ayt va past ball ber.
+   HAR BIR strategiya uchun o'z savdo rejasini ham chiz (bu majburiy — treyder har bir strategiyani rasmda alohida ko'radi):
+   - entry_price, stop_loss_price, take_profit_1_price, take_profit_2_price — shu strategiya qoidalari bo'yicha aniq narxlar. Signal WAIT bo'lsa ham, setup shakllansa qayerdan kirish kerakligini (limit order zonasi) ko'rsat. Umuman setup bo'lmasa — hammasi 0.
+   - position — shu narxlarning rasmdagi joyi (TradingView Long/Short position vositasi kabi): image_index — strategiya timeframe'idagi rasm raqami, x1 — kirish shamining x koordinatasi, x2 — qutining o'ng cheti (odatda x1+0.25, ko'pi bilan 1), y_entry/y_sl/y_tp1/y_tp2 — narx shkalasiga qarab hisoblangan y koordinatalar. Setup bo'lmasa image_index = 0.
+   - drawings — shu strategiyaga xos belgilar: SMC — order block, FVG, likvidlik, BOS/CHoCH; Volume Profile — diapazon, POC, soxta chiqish; Fibonacci — 0.5/0.618/0.786 darajalari; Supply/Demand — zonalar; Breakout — yorilgan daraja; Wyckoff — spring/upthrust; figuralar — bo'yin chizig'i; sessiyalar — Asia range. Faqat grafikda haqiqatan ko'rgan narsangni chiz.
 6. Agar kun yangiliklari berilgan bo'lsa, ularni (FOMC, CPI, NFP, Fed nutqlari, DXY, real yield, geosiyosat) texnik tahlil bilan birlashtir: bozor nima sababdan shu yo'nalishda ketayotganini va yaqin soatlarda qanday yangilik xavfi borligini tushuntir. Muhim yangilik oldidan kirishni tavsiya qilma yoki ogohlantir.
-7. Rasmlar ustiga chizish uchun "drawings" ber: tavsiya etilgan kirish timeframe rasmiga albatta TradingView "Long/Short position" vositasi kabi pozitsiyani chiz — Entry dan TP gacha yashil zona (kind "zone", color "green"), Entry dan SL gacha qizil zona (kind "zone", color "red"), ikkalasi ham hozirgi shamdan o'ngga; shuningdek Entry, Stop Loss, TP1, TP2 gorizontal chiziqlarini (kind "hline"), diapazon / POC (agar Volume Profile bo'lsa), asosiy zonalarni (kind "zone": order block, FVG, supply/demand) va kutilayotgan narx harakatini (kind "arrow") chiz. Boshqa rasmlarga ham asosiy darajalarni chizishing mumkin. Koordinatalar rasm o'lchamiga nisbatan 0 dan 1 gacha kasr: x=0 chap chet, x=1 o'ng chet, y=0 yuqori chet, y=1 pastki chet. Chiziqning y qiymatini grafikning o'ng tomonidagi narx shkalasiga qarab, narx aynan shu balandlikka to'g'ri keladigan qilib hisobla. image_index — rasm raqami (Rasm 1, Rasm 2...). hline uchun y2=y1; label uchun x2=x1, y2=y1.
+7. Yakuniy reja uchun trade_plan.position ni (yuqoridagi kabi) to'ldir — pozitsiya qutisini sayt o'zi chizadi, shuning uchun Entry/SL/TP ni drawings'da qayta chizma. Umumiy "drawings" ga yakuniy rejani asoslovchi asosiy zonalarni (kind "zone": order block, FVG, supply/demand, diapazon / POC), muhim darajalarni (kind "hline") va kutilayotgan narx harakatini (kind "arrow") chiz. Boshqa rasmlarga ham asosiy darajalarni chizishing mumkin. Koordinatalar rasm o'lchamiga nisbatan 0 dan 1 gacha kasr: x=0 chap chet, x=1 o'ng chet, y=0 yuqori chet, y=1 pastki chet. Chiziqning y qiymatini grafikning o'ng tomonidagi narx shkalasiga qarab, narx aynan shu balandlikka to'g'ri keladigan qilib hisobla. image_index — rasm raqami (Rasm 1, Rasm 2...). hline uchun y2=y1; label uchun x2=x1, y2=y1.
 8. Yakuniy savdo rejasini strategiyalar konfluensiyasi (bir nechtasi bir xil yo'nalish va zonani ko'rsatishi) asosida tuz va qaysi strategiyalar uni qo'llab-quvvatlashini yoz.
 9. trade_plan'dagi *_price maydonlariga aniq raqam yoz (masalan 2662.5) — lot kalkulyatori shundan foydalanadi. Kirish zona bo'lsa, o'rtasini yoz. Narxni shkaladan o'qib bo'lmasa yoki signal WAIT bo'lsa, 0 yoz.
 10. Agar grafiklar aniq signal bermasa yoki timeframe'lar bir-biriga zid bo'lsa, "KUTISH" deb ayt — majburan savdo o'ylab topma.
@@ -205,6 +209,42 @@ Qoidalar:
 - Har bir rasmning timeframe'ini foydalanuvchi bergan yorliqdan ol; yorliq bo'lmasa, grafikdagi yozuvdan aniqla.
 - Javobni o'zbek tilida yoz.
 - Bu moliyaviy maslahat emas; ishonch darajasini halol baholagin.`;
+
+// Free-form annotations; coordinates are 0..1 fractions of the image (x from left, y from top).
+const DRAWINGS_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      image_index: { type: "integer" },
+      kind: { type: "string", enum: ["hline", "zone", "arrow", "label"] },
+      color: { type: "string", enum: ["green", "red", "gold", "blue", "white"] },
+      label: { type: "string" },
+      x1: { type: "number" },
+      y1: { type: "number" },
+      x2: { type: "number" },
+      y2: { type: "number" },
+    },
+    required: ["image_index", "kind", "color", "label", "x1", "y1", "x2", "y2"],
+  },
+};
+
+// A TradingView-style long/short position box: entry, SL and TP levels as y fractions on one image.
+const POSITION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    image_index: { type: "integer" },
+    x1: { type: "number" },
+    x2: { type: "number" },
+    y_entry: { type: "number" },
+    y_sl: { type: "number" },
+    y_tp1: { type: "number" },
+    y_tp2: { type: "number" },
+  },
+  required: ["image_index", "x1", "x2", "y_entry", "y_sl", "y_tp1", "y_tp2"],
+};
 
 const ANALYSIS_SCHEMA = {
   type: "object",
@@ -237,6 +277,12 @@ const ANALYSIS_SCHEMA = {
           timeframe: { type: "string" },
           score: { type: "integer" },
           reasoning: { type: "string" },
+          entry_price: { type: "number" },
+          stop_loss_price: { type: "number" },
+          take_profit_1_price: { type: "number" },
+          take_profit_2_price: { type: "number" },
+          position: POSITION_SCHEMA,
+          drawings: DRAWINGS_SCHEMA,
           checks: {
             type: "array",
             items: {
@@ -251,31 +297,15 @@ const ANALYSIS_SCHEMA = {
             },
           },
         },
-        required: ["strategy", "signal", "timeframe", "score", "reasoning", "checks"],
+        required: ["strategy", "signal", "timeframe", "score", "reasoning", "checks",
+          "entry_price", "stop_loss_price", "take_profit_1_price", "take_profit_2_price", "position", "drawings"],
       },
     },
     best_strategy: { type: "string" },
     best_strategy_reason: { type: "string" },
     market_reason: { type: "string" },
     news_impact: { type: "string" },
-    drawings: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          image_index: { type: "integer" },
-          kind: { type: "string", enum: ["hline", "zone", "arrow", "label"] },
-          color: { type: "string", enum: ["green", "red", "gold", "blue", "white"] },
-          label: { type: "string" },
-          x1: { type: "number" },
-          y1: { type: "number" },
-          x2: { type: "number" },
-          y2: { type: "number" },
-        },
-        required: ["image_index", "kind", "color", "label", "x1", "y1", "x2", "y2"],
-      },
-    },
+    drawings: DRAWINGS_SCHEMA,
     supporting_strategies: { type: "array", items: { type: "string" } },
     recommended_entry_timeframe: { type: "string" },
     entry_timeframe_reason: { type: "string" },
@@ -295,11 +325,12 @@ const ANALYSIS_SCHEMA = {
         stop_loss_price: { type: "number" },
         take_profit_1_price: { type: "number" },
         take_profit_2_price: { type: "number" },
+        position: POSITION_SCHEMA,
       },
       required: [
         "direction", "entry", "stop_loss", "take_profit_1", "take_profit_2",
         "risk_reward", "confirmation", "invalidation",
-        "entry_price", "stop_loss_price", "take_profit_1_price", "take_profit_2_price",
+        "entry_price", "stop_loss_price", "take_profit_1_price", "take_profit_2_price", "position",
       ],
     },
     confidence: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"] },
@@ -469,12 +500,12 @@ app.post("/api/analyze", async (req, res) => {
 
     const stream = client.beta.messages.stream({
       model: MODEL,
-      max_tokens: 64000,
+      max_tokens: 128000,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       thinking: { type: "adaptive" },
       output_config: {
-        effort: "high",
+        effort: process.env.ANALYSIS_EFFORT || "xhigh",
         format: { type: "json_schema", schema: ANALYSIS_SCHEMA },
       },
       system: SYSTEM_PROMPT,

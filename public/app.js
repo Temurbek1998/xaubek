@@ -25,15 +25,15 @@ async function api(url, opts) {
 }
 
 api("/api/status").then((r) => r.json()).then((st) => {
-  $("serverStatus").innerHTML = st.hasKey
-    ? `<span class="dot ok"></span> Claude API ulangan · model: <b>${esc(st.model)}</b>`
-    : `<span class="dot bad"></span> Serverda <b>ANTHROPIC_API_KEY</b> o'rnatilmagan (Render → Environment)`;
+  // Only problems are shown; a working setup needs no status line.
+  const problems = [];
+  if (!st.hasKey) problems.push(`<span class="dot bad"></span> Serverda <b>ANTHROPIC_API_KEY</b> o'rnatilmagan (Render → Environment)`);
+  if (!st.hasData) problems.push(`<span class="dot bad"></span> Jonli ma'lumot uchun <b>TWELVEDATA_API_KEY</b> kerak (Render → Environment)`);
+  $("serverStatus").innerHTML = problems.join("<br>");
+  $("serverStatus").classList.toggle("hidden", !problems.length);
   hasLiveData = Boolean(st.hasData);
   $("analyze").disabled = !canAnalyze();
   $("liveInfo").classList.toggle("hidden", !hasLiveData);
-  $("serverStatus").innerHTML += st.hasData
-    ? `<br><span class="dot ok"></span> Jonli ma'lumot (Twelve Data) ulangan`
-    : `<br><span class="dot bad"></span> Jonli ma'lumot uchun <b>TWELVEDATA_API_KEY</b> kerak (Render → Environment)`;
   $("logout").classList.toggle("hidden", !st.protected);
 }).catch(() => {});
 $("logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login.html"; };

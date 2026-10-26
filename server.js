@@ -444,6 +444,14 @@ app.get("/api/strategies", (req, res) => {
   res.json(Object.entries(STRATEGIES).map(([id, st]) => ({ id, label: st.label, rules: st.rules })));
 });
 
+// Trading style chosen by the trader; it decides timeframes, SL/TP size and holding time for all 11 strategies.
+const TRADING_STYLES = {
+  scalping: "SKALPING — kirish 1m/5m da (bias 15m/1H dan), SL odatda 2–6 $ (20–60 pips), TP R:R 1:1.5–1:2, savdo bir necha daqiqadan 1 soatgacha; sessiya ochilishlari (London/NY killzone) va spred muhim; yangilik oldidan kirma.",
+  intraday: "INTRADAY — kirish 15m/1H da (bias 4H dan), SL odatda 5–15 $, TP R:R 1:2–1:3, savdo shu kunning o'zida yopiladi; kunlik high/low va sessiyalar muhim.",
+  swing: "SWING — kirish 1H/4H da (bias 1D/1W dan), SL odatda 15–40 $, TP R:R 1:2–1:4, savdo bir necha kun ushlanadi; kunlik va haftalik darajalar, fundamental fon muhim.",
+  position: "POZITSION — kirish 4H/1D da (bias 1W/1M dan), SL 40 $ dan katta, savdo bir necha hafta ushlanadi; makro omillar (Fed siyosati, real yield, DXY trend) muhim.",
+};
+
 // In-memory analysis jobs; finished jobs are dropped after 3 hours.
 const jobs = new Map();
 function createJob(images) {
@@ -523,7 +531,8 @@ app.post("/api/analyze", async (req, res) => {
     return res.status(500).json({ error: "Serverda ANTHROPIC_API_KEY o'rnatilmagan (Render → Environment)." });
   }
 
-  const { images, note, strategies, useNews } = req.body || {};
+  const { images, note, strategies, useNews, style } = req.body || {};
+  const styleText = TRADING_STYLES[style] || TRADING_STYLES.intraday;
   const chosen = (Array.isArray(strategies) ? strategies : Object.keys(STRATEGIES)).filter((k) => STRATEGIES[k]);
   if (chosen.length === 0) {
     return res.status(400).json({ error: "Kamida bitta strategiyani tanlang." });
@@ -548,6 +557,10 @@ app.post("/api/analyze", async (req, res) => {
     text:
       `Hozirgi vaqt (UTC): ${new Date().toISOString().slice(0, 16).replace("T", " ")}.\n` +
       "Yuqoridagi XAU/USD grafiklarini tahlil qil va qaysi timeframe'da savdoga kirishni tavsiya qil.\n\n" +
+      `TREYDERNING SAVDO TURI: ${styleText}\n` +
+      "Barcha strategiyalarni AYNAN shu savdo turi uchun qo'lla: timeframe'lar, kirish nuqtasi, SL/TP masofasi va R:R shu turga mos bo'lsin. " +
+      "Yakuniy tavsiya etilgan timeframe ham shu turga mos bo'lsin. Strategiya shu savdo turiga yaxshi mos kelmasa (masalan, Wyckoff skalpingda), " +
+      "buni reasoning'da ayt va ballni pasaytir. Agar yuklangan rasmlar shu savdo turi uchun yetarli bo'lmasa (masalan, skalping uchun 5m/15m yo'q), freshness_warning emas, risks ga yoz.\n\n" +
       "Quyidagi strategiyalarning har birini alohida sinab ko'r:\n" +
       chosen.map((k, i) => `${i + 1}. ${STRATEGIES[k].label}\n` + STRATEGIES[k].rules.map((r) => `   - ${r}`).join("\n")).join("\n") +
       (note ? `\n\nTreyderning izohi: ${note}` : ""),

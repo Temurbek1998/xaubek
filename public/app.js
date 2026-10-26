@@ -115,6 +115,18 @@ document.addEventListener("paste", (e) => {
     .forEach((it) => (onChat ? addChatFile : addFile)(it.getAsFile()));
 });
 
+// Trading style: changes how Claude applies all 11 strategies (timeframes, SL/TP size, holding time).
+const STYLE_NAMES = { scalping: "Skalping", intraday: "Intraday", swing: "Swing", position: "Pozitsion" };
+let tradeStyle = "intraday";
+try { tradeStyle = localStorage.getItem("xau_style") || "intraday"; } catch {}
+function setStyle(st) {
+  tradeStyle = st;
+  document.querySelectorAll("#styles button").forEach((b) => b.classList.toggle("on", b.dataset.s === st));
+  try { localStorage.setItem("xau_style", st); } catch {}
+}
+document.querySelectorAll("#styles button").forEach((b) => (b.onclick = () => setStyle(b.dataset.s)));
+setStyle(tradeStyle);
+
 // Analyses run as server-side jobs: the page can sleep or reload and still pick up the result.
 const JOB_KEY = "xau_job";
 let pollTimer = null;
@@ -136,12 +148,13 @@ $("analyze").onclick = async () => {
         note: $("note").value.trim(),
         strategies,
         useNews,
+        style: tradeStyle,
         images: sorted.map(({ mediaType, data, timeframe }) => ({ mediaType, data, timeframe })),
       }),
     });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || `Xato ${res.status}`);
-    try { localStorage.setItem(JOB_KEY, JSON.stringify({ id: body.jobId, n: sorted.length, s: strategies.length, news: useNews })); } catch {}
+    try { localStorage.setItem(JOB_KEY, JSON.stringify({ id: body.jobId, n: sorted.length, s: strategies.length, news: useNews, style: tradeStyle })); } catch {}
     pollJob();
   } catch (err) {
     alertMsg(err.message);
@@ -174,7 +187,7 @@ async function pollJob(quietIfMissing = false) {
   if (body.status === "running") {
     showResultCard();
     const mins = Math.floor((Date.now() - body.startedAt) / 60000), secs = Math.floor((Date.now() - body.startedAt) / 1000) % 60;
-    $("result").innerHTML = `<p><span class="spinner"></span>Claude ${job.n} ta grafikni ${job.s} ta strategiya bo'yicha tahlil qilmoqda${job.news ? " va Forex Factory yangiliklarini o'qimoqda" : ""}... <b>${mins}:${String(secs).padStart(2, "0")}</b></p>
+    $("result").innerHTML = `<p><span class="spinner"></span>Claude ${job.n} ta grafikni ${job.s} ta strategiya bo'yicha <b>${STYLE_NAMES[job.style] || ""}</b> uchun tahlil qilmoqda${job.news ? " va Forex Factory yangiliklarini o'qimoqda" : ""}... <b>${mins}:${String(secs).padStart(2, "0")}</b></p>
       <p class="hint">Tahlil serverda ishlayapti — saytdan chiqib, keyin qaytsangiz ham natija shu yerda chiqadi. Odatda 2–5 daqiqa.</p>`;
     $("analyze").disabled = true;
     pollTimer = setTimeout(pollJob, 4000);
@@ -186,9 +199,10 @@ async function pollJob(quietIfMissing = false) {
     return alertMsg(body.error);
   }
   const sent = (body.images || []).map((i) => ({ ...i, url: `data:${i.mediaType};base64,${i.data}` }));
-  lastAnalysis = body.analysis;
+  lastAnalysis = { ...body.analysis, trading_style: STYLE_NAMES[job.style] || "" };
   showResultCard();
   showResult(body.analysis, body, sent);
+  setupResultChat(job.id);
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && savedJob()) pollJob(true); });
 pollJob(true);
@@ -436,7 +450,23 @@ function showResult(a, body, sent) {
       ${a.timeframes.map((t) => `<tr><td><b>${esc(t.timeframe)}</b></td><td>${badge(t.trend)}</td><td>${esc(t.key_levels)}</td><td>${esc(t.notes)}</td></tr>`).join("")}
     </table></div>
     <h3>Risklar</h3>
-    <ul>${a.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`;
+    <ul>${a.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+    <div class="result-chat">
+      <h3>💬 Tahlil bo'yicha savollar</h3>
+      <p class="hint" style="margin:-4px 0 10px">Claude shu tahlilni ko'rib turibdi — istalgan savolni bering.</p>
+      <div class="chips" id="rcChips">
+        <button data-q="Nega aynan shu timeframe va shu strategiyani tanlading?">❓ Nega shu reja?</button>
+        <button data-q="Bu savdoga qarshi eng kuchli argumentlar qaysi? Qachon reja buziladi?">⚔️ Qarshi argumentlar</button>
+        <button data-q="SL va TP to'g'ri joydami? Yaxshiroq variant bormi?">🎯 SL/TP ni tekshir</button>
+        <button data-q="Kirgandan keyin pozitsiyani qanday boshqaray: breakeven, qisman yopish, chiqish?">🧭 Pozitsiyani boshqarish</button>
+        <button data-q="Hozir kirmasam, qaysi narxda yoki qanday signalda kirsam bo'ladi?">⏳ Qachon kirish kerak?</button>
+      </div>
+      <div id="rcLog" class="chat-log rc-log"></div>
+      <div class="chat-input">
+        <textarea id="rcText" rows="2" placeholder="Savolingiz... (Enter — yuborish)"></textarea>
+        <button id="rcSend" class="primary">Yuborish</button>
+      </div>
+    </div>`;
   renderPlanPicker(a, sent);
   $("dlAll").onclick = async () => {
     $("dlAll").disabled = true;
@@ -695,3 +725,44 @@ $("chips").querySelectorAll("button").forEach((b) => (b.onclick = () => {
   $("chatText").value = b.dataset.q;
   $("chatSend").click();
 }));
+
+
+// ---- Chat under the analysis result: its own conversation per analysis, always with the analysis as context. ----
+function setupResultChat(jobId) {
+  const key = "xau_rc_" + jobId;
+  let msgs = [];
+  try { msgs = JSON.parse(sessionStorage.getItem(key)) || []; } catch {}
+  const render = () => {
+    $("rcLog").innerHTML = msgs.map((m) => `
+      <div class="msg ${m.role}"><div class="who">${m.role === "user" ? "Siz" : "Claude"}</div>
+      <div class="bubble">${m.text ? fmt(m.text) : '<span class="spinner"></span>'}</div></div>`).join("")
+      || `<p class="hint">Yuqoridagi tugmalardan birini bosing yoki savolingizni yozing.</p>`;
+    $("rcLog").scrollTop = $("rcLog").scrollHeight;
+  };
+  const send = async (text) => {
+    text = (text || "").trim();
+    if (!text || $("rcSend").disabled) return;
+    msgs.push({ role: "user", text });
+    const reply = { role: "assistant", text: "" };
+    msgs.push(reply);
+    $("rcText").value = "";
+    $("rcSend").disabled = true;
+    render();
+    try {
+      await streamChat(msgs.slice(0, -1).map(({ role, text }) => ({ role, text })), lastAnalysis, (t) => { reply.text = t; render(); });
+      if (!reply.text) reply.text = "[Bo'sh javob]";
+    } catch (err) {
+      reply.text = `⚠️ ${err.message}`;
+    } finally {
+      $("rcSend").disabled = false;
+      try { sessionStorage.setItem(key, JSON.stringify(msgs)); } catch {}
+      render();
+    }
+  };
+  $("rcSend").onclick = () => send($("rcText").value);
+  $("rcText").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send($("rcText").value); }
+  });
+  $("rcChips").querySelectorAll("button").forEach((b) => (b.onclick = () => send(b.dataset.q)));
+  render();
+}

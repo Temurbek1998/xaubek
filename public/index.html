@@ -73,7 +73,14 @@
         <label><span>Kontrakt (oz/lot)</span><input id="contract" type="number" min="1" step="1" placeholder="100"></label>
       </div>
       <p class="hint" style="margin-top:4px">Lot kalkulyatori shu qiymatlardan foydalanadi. XAU/USD uchun ko'p brokerlarda 1 lot = 100 oz.</p>
-      <textarea id="note" rows="2" placeholder="Izoh (ixtiyoriy): scalp, risk 1%, London sessiyasi..."></textarea>
+      <label class="field-label" style="margin-top:12px">Savdo turi</label>
+      <div class="styles" id="styles">
+        <button data-s="scalping"><b>⚡ Skalping</b><small>1m–5m · daqiqalar</small></button>
+        <button data-s="intraday"><b>📊 Intraday</b><small>15m–1H · shu kun</small></button>
+        <button data-s="swing"><b>🌊 Swing</b><small>1H–4H · bir necha kun</small></button>
+        <button data-s="position"><b>🏔 Pozitsion</b><small>4H–1D · haftalar</small></button>
+      </div>
+      <textarea id="note" rows="2" placeholder="Izoh (ixtiyoriy): risk 1%, London sessiyasi, faqat BUY..."></textarea>
       <label class="check"><input id="useNews" type="checkbox" checked> Forex Factory yangiliklari va kalendari (FOMC, CPI, NFP...)</label>
       <button id="analyze" class="primary" disabled>⚡ Tahlil qilish</button>
     </section>

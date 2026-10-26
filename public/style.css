@@ -223,3 +223,9 @@ body { transition: background .2s, color .2s; }
 }
 .stale { border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
 .stale small { color: var(--muted); }
+.styles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.styles button { background: var(--bg); color: var(--text); border: 1px solid var(--line); text-align: left; padding: 9px 11px; display: grid; gap: 1px; }
+.styles button small { color: var(--muted); font-weight: 500; font-size: 12px; }
+.styles button.on { border-color: var(--gold); background: color-mix(in srgb, var(--gold) 14%, transparent); }
+.result-chat { margin-top: 22px; padding-top: 6px; border-top: 1px solid var(--line); }
+.rc-log { min-height: 120px; max-height: 480px; }

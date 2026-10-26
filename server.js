@@ -86,12 +86,13 @@ const LIVE_FRAMES = {
   position: ["1week", "1day", "4h", "1h"],
 };
 const TF_NAMES = { "1min": "1m", "5min": "5m", "15min": "15m", "1h": "1H", "4h": "4H", "1day": "1D", "1week": "1W" };
-const candleCache = new Map(); // interval -> { at, candles }
+const candleCache = new Map(); // symbol|interval|size -> { at, candles }
 
-async function fetchCandles(interval) {
-  const hit = candleCache.get(interval);
+async function fetchCandles(interval, symbol = "XAU/USD", size = 300) {
+  const key = `${symbol}|${interval}|${size}`;
+  const hit = candleCache.get(key);
   if (hit && Date.now() - hit.at < 60_000) return hit.candles;
-  const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${interval}&outputsize=120&order=asc&timezone=UTC&apikey=${encodeURIComponent(TWELVEDATA_KEY)}`;
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=${size}&order=asc&timezone=UTC&apikey=${encodeURIComponent(TWELVEDATA_KEY)}`;
   const r = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   const body = await r.json().catch(() => ({}));
   if (!r.ok || body.status === "error" || !Array.isArray(body.values)) {
@@ -99,8 +100,37 @@ async function fetchCandles(interval) {
   }
   const candles = body.values.map((v) => ({ t: v.datetime, o: +v.open, h: +v.high, l: +v.low, c: +v.close }))
     .filter((c) => [c.o, c.h, c.l, c.c].every(Number.isFinite));
-  candleCache.set(interval, { at: Date.now(), candles });
+  candleCache.set(key, { at: Date.now(), candles });
   return candles;
+}
+
+// Intermarket confirmation for gold: the dollar index and the US 10-year yield (gold usually moves against both).
+const MACRO_INTERVAL = { scalping: "15min", intraday: "1h", swing: "4h", position: "1day" };
+const MACRO = [
+  { name: "DXY (dollar indeksi)", symbols: ["DXY"], fallback: { symbol: "EUR/USD", note: "DXY mavjud emas — EUR/USD berildi (DXY ning ~58% i EUR; EUR/USD ko'tarilsa dollar zaiflashadi)" } },
+  { name: "AQSh 10 yillik obligatsiya daromadi (US10Y)", symbols: ["US10Y"] },
+];
+
+async function macroText(style) {
+  const interval = MACRO_INTERVAL[style] || "1h";
+  const parts = [];
+  for (const m of MACRO) {
+    let candles = null, label = m.name, note = "";
+    for (const sym of m.symbols) {
+      try { candles = await fetchCandles(interval, sym, 80); break; } catch {}
+    }
+    if (!candles && m.fallback) {
+      try { candles = await fetchCandles(interval, m.fallback.symbol, 80); label = m.fallback.symbol; note = m.fallback.note; } catch {}
+    }
+    if (!candles?.length) { parts.push(`${m.name}: ma'lumot olinmadi (Twelve Data tarifida mavjud emas).`); continue; }
+    const first = candles[0].c, last = candles[candles.length - 1].c;
+    parts.push(`${label} — ${TF_NAMES[interval]}, oxirgi ${candles.length} sham${note ? ` (${note})` : ""}. ` +
+      `O'zgarish: ${first} → ${last} (${(((last - first) / first) * 100).toFixed(2)}%).\n` +
+      `Yopilish narxlari (UTC vaqt, close):\n` + candles.map((c) => `${c.t.slice(0, 16)},${c.c}`).join("\n"));
+  }
+  return "INTERMARKET TASDIQ (jonli, Twelve Data):\n" + parts.join("\n\n") +
+    "\n\nBularni XAU/USD bilan solishtir: dollar va real daromad tushsa oltin uchun bullish, ko'tarilsa bearish. " +
+    "Agar oltin harakati bularga zid bo'lsa (divergensiya), buni market_reason va risks da ayt va ishonchni (confidence) shunga moslashtir.";
 }
 
 app.get("/api/candles", async (req, res) => {
@@ -599,8 +629,8 @@ app.post("/api/analyze", async (req, res) => {
       text: live
         ? `Rasm ${i + 1} — timeframe: ${img.timeframe} — JONLI MA'LUMOT (Twelve Data, sayt chizgan grafik).\n` +
           `Narx shkalasi: y = ${sc.top.toFixed(4)} da ${sc.max}, y = ${sc.bottom.toFixed(4)} da ${sc.min} (chiziqli). ` +
-          `Shamlar: ${sc.count} ta, birinchisining markazi x = ${sc.left.toFixed(4)}, oxirgisiniki x = ${sc.right.toFixed(4)} (teng oraliqda). ` +
-          `Oxirgi sham — eng yangi narx. OHLC (UTC vaqt, open, high, low, close):\n${String(img.ohlc || "").slice(-9000)}`
+          `Rasmda oxirgi ${sc.count} ta sham ko'rinadi: birinchisining markazi x = ${sc.left.toFixed(4)}, oxirgisiniki x = ${sc.right.toFixed(4)} (teng oraliqda). ` +
+          `Oxirgi sham — eng yangi narx. Kengroq tarix uchun ko'proq shamning OHLC ma'lumoti (UTC vaqt, open, high, low, close):\n${String(img.ohlc || "").slice(-16000)}`
         : `Rasm ${i + 1} — timeframe: ${img.timeframe || "noma'lum"}`,
     });
     content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
@@ -622,7 +652,11 @@ app.post("/api/analyze", async (req, res) => {
   // Runs in the background so the analysis survives the browser tab going to sleep; the page polls /api/jobs/:id.
   const job = createJob(images.map(({ ohlc, ...rest }) => rest));
   res.status(202).json({ jobId: job.id });
-  runAnalysis(content, Boolean(useNews))
+  const anyLive = images.some((i) => i.scale);
+  (async () => {
+    if (anyLive && TWELVEDATA_KEY) content.push({ type: "text", text: await macroText(style) });
+    return runAnalysis(content, Boolean(useNews));
+  })()
     .then((result) => { snapToPrices(result.analysis, job.images); Object.assign(job, { status: "done", result }); })
     .catch((err) => Object.assign(job, { status: "error", error: analysisErrorMessage(err) }))
     .finally(() => { job.finishedAt = Date.now(); });

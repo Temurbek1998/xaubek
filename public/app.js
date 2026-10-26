@@ -78,7 +78,9 @@ function render() {
 // ---- Live data: the site draws XAU/USD candles itself, so it knows the exact price of every pixel.
 const LIVE = { w: 1280, h: 720, top: 46, bottom: 44, left: 12, right: 86 };
 
-function renderLiveChart(tf, candles) {
+function renderLiveChart(tf, all) {
+  // The image shows the latest 160 candles (readable); Claude also gets all ~300 as OHLC numbers.
+  const candles = all.slice(-160);
   const { w, h } = LIVE;
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
@@ -135,7 +137,7 @@ function renderLiveChart(tf, candles) {
   return {
     mediaType: "image/png", data: url.split(",")[1], url, timeframe: tf, live: true,
     scale: { top: pTop / h, bottom: pBot / h, max, min, left: xOf(0) / w, right: xOf(candles.length - 1) / w, count: candles.length },
-    ohlc: candles.map((c) => `${c.t.slice(0, 16)},${c.o.toFixed(2)},${c.h.toFixed(2)},${c.l.toFixed(2)},${c.c.toFixed(2)}`).join("\n"),
+    ohlc: all.map((c) => `${c.t.slice(0, 16)},${c.o.toFixed(2)},${c.h.toFixed(2)},${c.l.toFixed(2)},${c.c.toFixed(2)}`).join("\n"),
   };
 }
 

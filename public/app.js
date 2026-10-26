@@ -75,6 +75,7 @@ document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => {
   $("page-analyze").classList.toggle("hidden", t.dataset.tab !== "analyze");
   $("page-journal").classList.toggle("hidden", t.dataset.tab !== "journal");
   $("page-chat").classList.toggle("hidden", t.dataset.tab !== "chat");
+  $("page-brief").classList.toggle("hidden", t.dataset.tab !== "brief");
   if (t.dataset.tab === "chat") { updateCtxState(); $("chatText").focus(); }
 }));
 
@@ -271,6 +272,14 @@ function showResult(a, body, sent) {
       <div><small>Tasdiqlovchi signal</small>${esc(p.confirmation)}</div>
       <div><small>Reja bekor bo'ladi, agar</small>${esc(p.invalidation)}</div>
     </div>
+    <h3>🧮 Lot va risk kalkulyatori</h3>
+    <div class="calc" id="calc">
+      <label><span>Kirish</span><input data-k="entry" type="number" step="any" value="${+p.entry_price || ""}"></label>
+      <label><span>Stop Loss</span><input data-k="sl" type="number" step="any" value="${+p.stop_loss_price || ""}"></label>
+      <label><span>Take Profit 1</span><input data-k="tp1" type="number" step="any" value="${+p.take_profit_1_price || ""}"></label>
+      <label><span>Take Profit 2</span><input data-k="tp2" type="number" step="any" value="${+p.take_profit_2_price || ""}"></label>
+    </div>
+    <div id="calcOut" class="plan"></div>
     <h3>Timeframe'lar bo'yicha</h3>
     <div class="tfwrap"><table class="tfs">
       <tr><th>TF</th><th>Trend</th><th>Asosiy darajalar</th><th>Izoh</th></tr>
@@ -279,13 +288,17 @@ function showResult(a, body, sent) {
     <h3>Risklar</h3>
     <ul>${a.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`;
   renderCharts(a, sent);
+  $("calc").oninput = updateCalc;
+  updateCalc();
   const bar = document.createElement("div");
   bar.className = "journal-add";
   bar.innerHTML = p.direction === "WAIT" ? "" : `<button class="secondary">Jurnalga qo'shish (natijani keyin belgilash uchun)</button>`;
   $("result").appendChild(bar);
   bar.querySelector("button")?.addEventListener("click", (e) => {
     addJournal({ id: Date.now(), date: new Date().toISOString(), tf: a.recommended_entry_timeframe, direction: p.direction,
-      entry: p.entry, sl: p.stop_loss, tp: p.take_profit_1, strategy: a.best_strategy, confidence: a.confidence, result: null });
+      entry: p.entry, sl: p.stop_loss, tp: p.take_profit_1, strategy: a.best_strategy, confidence: a.confidence, result: null,
+      entry_price: +p.entry_price || null, sl_price: +p.stop_loss_price || null, tp_price: +p.take_profit_1_price || null,
+      lot: calcLot(), news: a.news_impact });
     e.target.disabled = true; e.target.textContent = "Jurnalga qo'shildi ✓";
   });
 }
@@ -390,23 +403,11 @@ $("chatSend").onclick = async () => {
   renderChatImgs(); renderChat();
   $("chatSend").disabled = true;
   try {
-    const res = await api("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: chat.slice(0, -1).map(({ role, text, images }) => ({ role, text, images: images.map(({ mediaType, data }) => ({ mediaType, data })) })),
-        context: $("chatContext").checked ? lastAnalysis : null,
-      }),
-    });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Xato ${res.status}`);
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      reply.text += dec.decode(value, { stream: true });
-      renderChat();
-    }
+    await streamChat(
+      chat.slice(0, -1).map(({ role, text, images }) => ({ role, text, images: images.map(({ mediaType, data }) => ({ mediaType, data })) })),
+      $("chatContext").checked ? lastAnalysis : null,
+      (t) => { reply.text = t; renderChat(); },
+    );
     if (!reply.text) reply.text = "[Bo'sh javob]";
   } catch (err) {
     reply.text = `⚠️ ${err.message}`;
@@ -416,3 +417,119 @@ $("chatSend").onclick = async () => {
   }
 };
 renderChat();
+
+
+// ---- Account settings and lot / risk calculator (pure math, no AI). ----
+const ACCT_KEY = "xau_account";
+try {
+  const acct = JSON.parse(localStorage.getItem(ACCT_KEY)) || {};
+  $("balance").value = acct.balance ?? ""; $("riskPct").value = acct.riskPct ?? 1; $("contract").value = acct.contract ?? 100;
+} catch { $("riskPct").value = 1; $("contract").value = 100; }
+["balance", "riskPct", "contract"].forEach((id) => ($(id).oninput = () => {
+  try { localStorage.setItem(ACCT_KEY, JSON.stringify({ balance: $("balance").value, riskPct: $("riskPct").value, contract: $("contract").value })); } catch {}
+  if ($("calc")) updateCalc();
+}));
+
+function calcInputs() {
+  const v = {};
+  document.querySelectorAll("#calc input").forEach((i) => (v[i.dataset.k] = parseFloat(i.value)));
+  return { ...v, balance: parseFloat($("balance").value), riskPct: parseFloat($("riskPct").value), contract: parseFloat($("contract").value) || 100 };
+}
+// Lot size so that hitting SL loses exactly balance * risk%: lots = riskUSD / (|entry - SL| * oz per lot).
+function calcLot() {
+  if (!$("calc")) return null;
+  const c = calcInputs();
+  const dist = Math.abs(c.entry - c.sl);
+  if (!(dist > 0) || !(c.balance > 0) || !(c.riskPct > 0)) return null;
+  return Math.floor(((c.balance * c.riskPct) / 100 / (dist * c.contract)) * 100) / 100;
+}
+function updateCalc() {
+  const c = calcInputs();
+  const out = $("calcOut");
+  if (!out) return;
+  const dist = Math.abs(c.entry - c.sl);
+  if (!(dist > 0)) { out.innerHTML = `<div><small>Natija</small>Kirish va Stop Loss narxini kiriting</div>`; return; }
+  if (!(c.balance > 0)) { out.innerHTML = `<div><small>Natija</small>"Sozlamalar"da balansni kiriting</div>`; return; }
+  const lot = calcLot();
+  const money = (n) => (isFinite(n) ? `$${n.toFixed(2)}` : "—");
+  const loss = lot * dist * c.contract;
+  const p1 = c.tp1 ? lot * Math.abs(c.tp1 - c.entry) * c.contract : NaN;
+  const p2 = c.tp2 ? lot * Math.abs(c.tp2 - c.entry) * c.contract : NaN;
+  const rr = c.tp1 ? (Math.abs(c.tp1 - c.entry) / dist).toFixed(2) : "—";
+  out.innerHTML = `
+    <div class="hl"><small>Lot hajmi</small>${lot >= 0.01 ? lot.toFixed(2) : "0.01 dan kam — risk juda katta"}</div>
+    <div><small>SL masofasi</small>${dist.toFixed(2)} $ (${(dist * 10).toFixed(0)} pips)</div>
+    <div><small>SL bo'lsa zarar</small><span class="neg">−${money(loss)}</span></div>
+    <div><small>TP1 foyda</small><span class="pos">+${money(p1)}</span></div>
+    <div><small>TP2 foyda</small><span class="pos">+${money(p2)}</span></div>
+    <div><small>R:R (TP1)</small>1 : ${rr}</div>`;
+}
+
+// ---- Streaming helper shared by chat and coach. ----
+async function streamChat(messages, context, onText) {
+  const res = await api("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages, context }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Xato ${res.status}`);
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += dec.decode(value, { stream: true });
+    onText(text);
+  }
+  return text;
+}
+
+// ---- Daily market brief. ----
+$("briefBtn").onclick = async () => {
+  $("briefBtn").disabled = true;
+  $("briefOut").innerHTML = `<p><span class="spinner"></span>Forex Factory kalendari va yangiliklari o'qilmoqda... (30–90 soniya)</p>`;
+  try {
+    const res = await api("/api/brief", { method: "POST" });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `Xato ${res.status}`);
+    const n = body.news;
+    $("briefOut").innerHTML = `
+      <p class="muted">Tayyorlangan: ${esc(new Date(body.at).toLocaleString())}</p>
+      ${n.calendarError ? `<p class="error">${esc(n.calendarError)}</p>` : ""}
+      <div class="news brief">${fmt(n.text)}</div>
+      ${n.sources.length ? `<p class="sources">Manbalar: ${n.sources.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>`).join(" · ")}</p>` : ""}`;
+  } catch (err) {
+    $("briefOut").innerHTML = `<p class="error">${esc(err.message)}</p>`;
+  } finally {
+    $("briefBtn").disabled = false;
+  }
+};
+
+// ---- AI coach over the trade journal. ----
+$("coachBtn").onclick = async () => {
+  const j = loadJournal();
+  if (!j.some((e) => e.result)) {
+    $("coachOut").innerHTML = `<p class="hint">Avval kamida bir nechta savdoni TP yoki SL deb belgilang.</p>`;
+    return;
+  }
+  $("coachBtn").disabled = true;
+  $("coachOut").innerHTML = `<div class="news"><span class="spinner"></span>Jurnal tahlil qilinmoqda...</div>`;
+  try {
+    await streamChat(
+      [{ role: "user", text: "Savdo jurnalimni murabbiy sifatida tahlil qil: win rate, eng yaxshi va eng yomon strategiya/timeframe/yo'nalish, takrorlanayotgan xatolar va aniq tavsiyalar." }],
+      { journal: j.slice(0, 200) },
+      (t) => ($("coachOut").innerHTML = `<div class="news">${fmt(t)}</div>`),
+    );
+  } catch (err) {
+    $("coachOut").innerHTML = `<p class="error">${esc(err.message)}</p>`;
+  } finally {
+    $("coachBtn").disabled = false;
+  }
+};
+
+// ---- Quick prompts in chat. ----
+$("chips").querySelectorAll("button").forEach((b) => (b.onclick = () => {
+  $("chatText").value = b.dataset.q;
+  $("chatSend").click();
+}));

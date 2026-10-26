@@ -197,7 +197,8 @@ Vazifang:
 6. Agar kun yangiliklari berilgan bo'lsa, ularni (FOMC, CPI, NFP, Fed nutqlari, DXY, real yield, geosiyosat) texnik tahlil bilan birlashtir: bozor nima sababdan shu yo'nalishda ketayotganini va yaqin soatlarda qanday yangilik xavfi borligini tushuntir. Muhim yangilik oldidan kirishni tavsiya qilma yoki ogohlantir.
 7. Rasmlar ustiga chizish uchun "drawings" ber: tavsiya etilgan kirish timeframe rasmiga albatta TradingView "Long/Short position" vositasi kabi pozitsiyani chiz — Entry dan TP gacha yashil zona (kind "zone", color "green"), Entry dan SL gacha qizil zona (kind "zone", color "red"), ikkalasi ham hozirgi shamdan o'ngga; shuningdek Entry, Stop Loss, TP1, TP2 gorizontal chiziqlarini (kind "hline"), diapazon / POC (agar Volume Profile bo'lsa), asosiy zonalarni (kind "zone": order block, FVG, supply/demand) va kutilayotgan narx harakatini (kind "arrow") chiz. Boshqa rasmlarga ham asosiy darajalarni chizishing mumkin. Koordinatalar rasm o'lchamiga nisbatan 0 dan 1 gacha kasr: x=0 chap chet, x=1 o'ng chet, y=0 yuqori chet, y=1 pastki chet. Chiziqning y qiymatini grafikning o'ng tomonidagi narx shkalasiga qarab, narx aynan shu balandlikka to'g'ri keladigan qilib hisobla. image_index — rasm raqami (Rasm 1, Rasm 2...). hline uchun y2=y1; label uchun x2=x1, y2=y1.
 8. Yakuniy savdo rejasini strategiyalar konfluensiyasi (bir nechtasi bir xil yo'nalish va zonani ko'rsatishi) asosida tuz va qaysi strategiyalar uni qo'llab-quvvatlashini yoz.
-9. Agar grafiklar aniq signal bermasa yoki timeframe'lar bir-biriga zid bo'lsa, "KUTISH" deb ayt — majburan savdo o'ylab topma.
+9. trade_plan'dagi *_price maydonlariga aniq raqam yoz (masalan 2662.5) — lot kalkulyatori shundan foydalanadi. Kirish zona bo'lsa, o'rtasini yoz. Narxni shkaladan o'qib bo'lmasa yoki signal WAIT bo'lsa, 0 yoz.
+10. Agar grafiklar aniq signal bermasa yoki timeframe'lar bir-biriga zid bo'lsa, "KUTISH" deb ayt — majburan savdo o'ylab topma.
 
 Qoidalar:
 - Faqat rasmda ko'rinadigan narsaga tayan. Narxlarni grafik shkalasidan o'qi; aniq o'qib bo'lmasa, taxminiy ekanini ayt.
@@ -290,10 +291,15 @@ const ANALYSIS_SCHEMA = {
         risk_reward: { type: "string" },
         confirmation: { type: "string" },
         invalidation: { type: "string" },
+        entry_price: { type: "number" },
+        stop_loss_price: { type: "number" },
+        take_profit_1_price: { type: "number" },
+        take_profit_2_price: { type: "number" },
       },
       required: [
         "direction", "entry", "stop_loss", "take_profit_1", "take_profit_2",
         "risk_reward", "confirmation", "invalidation",
+        "entry_price", "stop_loss_price", "take_profit_1_price", "take_profit_2_price",
       ],
     },
     confidence: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"] },
@@ -383,6 +389,23 @@ async function fetchNewsBrief(client, now) {
   if (!text) return null;
   return { text, calendarError, sources: [...sources].slice(0, 8).map(([url, title]) => ({ url, title })) };
 }
+
+// Daily market brief: Forex Factory calendar + news, summarized by Claude (no charts needed).
+app.post("/api/brief", async (req, res) => {
+  if (!API_KEY) {
+    return res.status(500).json({ error: "Serverda ANTHROPIC_API_KEY o'rnatilmagan (Render → Environment)." });
+  }
+  try {
+    const news = await fetchNewsBrief(new Anthropic({ apiKey: API_KEY }), new Date());
+    if (!news) return res.status(502).json({ error: "Brifing tayyorlab bo'lmadi." });
+    res.json({ news, at: new Date().toISOString() });
+  } catch (err) {
+    if (err instanceof Anthropic.AuthenticationError) return res.status(502).json({ error: "Serverdagi API kalit noto'g'ri." });
+    if (err instanceof Anthropic.APIError) return res.status(502).json({ error: `Claude API xatosi (${err.status ?? "?"}): ${err.message}` });
+    console.error(err);
+    res.status(500).json({ error: "Serverda kutilmagan xato." });
+  }
+});
 
 app.get("/api/strategies", (req, res) => {
   res.json(Object.entries(STRATEGIES).map(([id, st]) => ({ id, label: st.label, rules: st.rules })));
@@ -475,7 +498,7 @@ app.post("/api/analyze", async (req, res) => {
     res.json({ analysis, news, newsError, model: message.model });
   } catch (err) {
     if (err instanceof Anthropic.AuthenticationError) {
-      return res.status(401).json({ error: "API kalit noto'g'ri yoki muddati o'tgan." });
+      return res.status(502).json({ error: "Serverdagi API kalit noto'g'ri yoki muddati o'tgan (Render → Environment)." });
     }
     if (err instanceof Anthropic.RateLimitError) {
       return res.status(429).json({ error: "So'rovlar limiti oshdi. Birozdan keyin qayta urinib ko'ring." });
@@ -493,7 +516,8 @@ app.post("/api/analyze", async (req, res) => {
 
 const CHAT_PROMPT = `Sen XAU Smart Trade platformasining AI yordamchisisan va admin (treyder) bilan o'zbek tilida gaplashasan.
 Mutaxassisliging: XAU/USD (oltin) texnik tahlili, Volume Profile, SMC/ICT, price action, risk-menejment, fundamental omillar (Fed, CPI, NFP, DXY).
-Agar suhbatga oxirgi tahlil natijasi (JSON) berilgan bo'lsa, savollarga shunga tayanib javob ber va qaysi qismga tayanganingni ayt.
+Agar suhbatga qo'shimcha kontekst (oxirgi tahlil natijasi yoki savdo jurnali, JSON) berilgan bo'lsa, savollarga shunga tayanib javob ber va qaysi qismga tayanganingni ayt.
+Savdo jurnali berilsa, murabbiy sifatida ishla: qaysi strategiya, timeframe va yo'nalish yaxshi/yomon natija berayotganini raqamlar bilan ko'rsat, takrorlanayotgan xatolarni top va 3–5 ta aniq tavsiya ber. Namuna kichik bo'lsa (20 tadan kam savdo), xulosalar ishonchsiz ekanini ayt.
 Admin rasm yuborsa, uni grafik sifatida tahlil qil. Aniq bo'l, bilmagan narsangni bilmayman de, va savdo qarori treyderning o'zida ekanini unutma.`;
 
 // Admin chat with Claude. Streams plain text back to the browser as it is generated.
@@ -521,7 +545,7 @@ app.post("/api/chat", async (req, res) => {
     return res.status(400).json({ error: "Oxirgi xabar admin xabari bo'lishi kerak." });
   }
   const system = context
-    ? `${CHAT_PROMPT}\n\nOxirgi tahlil natijasi (JSON):\n${JSON.stringify(context).slice(0, 60000)}`
+    ? `${CHAT_PROMPT}\n\nQo'shimcha kontekst (JSON):\n${JSON.stringify(context).slice(0, 60000)}`
     : CHAT_PROMPT;
 
   const client = new Anthropic({ apiKey: API_KEY });

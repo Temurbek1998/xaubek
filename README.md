@@ -34,9 +34,11 @@ Foydalanuvchi akkauntlari yo'q: saytga faqat `ADMIN_PASSWORD` bilan kiriladi (se
 API kalit faqat serverda turadi va brauzerga hech qachon yuborilmaydi. 5 marta noto'g'ri parol kiritilsa, 5 daqiqaga bloklanadi.
 
 - **📈 Tahlil** — skrinshotlar, strategiyalar, chizilgan reja.
-- **💬 AI chat** — Claude bilan to'g'ridan-to'g'ri suhbat: tahlil bo'yicha savollar, rasm yuborish (Ctrl+V),
+- **📰 Brifing** — Forex Factory kalendari va yangiliklari asosida kunlik bozor xulosasi (grafiksiz).
+- **🧮 Lot kalkulyatori** — AI rejasidagi Entry/SL/TP narxlari va balans/risk % dan lot hajmi, zarar va foyda.
+- **💬 AI chat** — tayyor savol tugmalari bilan: qarshi argumentlar, SL/TP tekshiruvi, xavfli soatlar, pozitsiyani boshqarish. Claude bilan to'g'ridan-to'g'ri suhbat: tahlil bo'yicha savollar, rasm yuborish (Ctrl+V),
   oxirgi tahlil natijasini suhbatga qo'shish.
-- **📒 Aniqlik jurnali** — TP/SL natijalari va har bir strategiyaning win rate'i.
+- **📒 Aniqlik jurnali** — TP/SL natijalari, har bir strategiyaning win rate'i va jurnalni tahlil qiluvchi **🤖 AI murabbiy**.
 
 Lokal ishga tushirish: `ANTHROPIC_API_KEY=sk-ant-... ADMIN_PASSWORD=parol npm start`
 (`ADMIN_PASSWORD` berilmasa, sayt parolsiz ochiladi — faqat o'z kompyuteringizda shunday qiling).

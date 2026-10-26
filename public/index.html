@@ -30,11 +30,11 @@
 <header class="hero">
   <div>
     <span class="chip live">● XAU/USD</span>
-    <h1>Grafikni yuklang — AI qaysi timeframe'da kirishni aytadi</h1>
-    <p>TradingView skrinshotlari yoki jonli ma'lumot · 11 ta strategiya qoidama-qoida · Forex Factory yangiliklari · Entry/SL/TP rasmingizga chiziladi</p>
+    <h1>Bitta tugma — AI qaysi timeframe'da kirishni aytadi</h1>
+    <p>Jonli XAU/USD ma'lumoti · 11 ta strategiya qoidama-qoida · Forex Factory yangiliklari · Entry/SL/TP rasmingizga chiziladi</p>
   </div>
   <div class="steps">
-    <div><span>1</span>Skrinshot</div>
+    <div><span>1</span>Savdo turi</div>
     <div><span>2</span>Strategiyalar</div>
     <div><span>3</span>AI tahlil</div>
     <div><span>4</span>Chizilgan reja</div>
@@ -44,16 +44,19 @@
 <div class="page" id="page-analyze">
   <aside class="side">
     <section class="card">
-      <h2><i>1</i> TradingView skrinshotlari</h2>
-      <div id="drop" class="drop">
-        <div class="drop-icon">⤓</div>
-        <p><b>Rasmlarni tashlang</b> yoki <b>Ctrl+V</b> bilan joylang</p>
-        <p class="hint">TradingView'da grafik ustida <kbd>Alt</kbd>+<kbd>S</kbd> → shu yerda <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
-        <input id="file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
-        <button id="pick" class="secondary">Rasm tanlash</button>
-      </div>
-      <button id="liveBtn" class="live-btn">📡 Jonli grafiklarni olish (Twelve Data)</button>
-      <p class="hint" style="margin:6px 0 0">Skrinshot shart emas: sayt XAU/USD shamlarini o'zi oladi va chizadi (savdo turingizga mos 4 ta timeframe). Zonalar va Entry/SL/TP aniq narx bo'yicha chiziladi. Ma'lumot faqat tugma bosilganda olinadi.</p>
+      <h2><i>1</i> Grafiklar</h2>
+      <div id="liveInfo" class="live-info hidden">📡 <b>Rasm shart emas.</b> "Tahlil qilish" ni bosing: sayt XAU/USD ning eng yangi shamlarini o'zi oladi va savdo turingizga mos 4 ta timeframe'ni chizadi. Zonalar va Entry/SL/TP aniq narx bo'yicha chiziladi.</div>
+      <button id="liveBtn" class="live-btn">📡 Grafiklarni oldindan ko'rish</button>
+      <details class="own-shots">
+        <summary>Yoki o'z TradingView skrinshotingizni yuklang (ixtiyoriy)</summary>
+        <div id="drop" class="drop">
+          <div class="drop-icon">⤓</div>
+          <p><b>Rasmlarni tashlang</b> yoki <b>Ctrl+V</b> bilan joylang</p>
+          <p class="hint">TradingView'da grafik ustida <kbd>Alt</kbd>+<kbd>S</kbd> → shu yerda <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
+          <input id="file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+          <button id="pick" class="secondary">Rasm tanlash</button>
+        </div>
+      </details>
       <div id="thumbs" class="thumbs"></div>
     </section>
 
@@ -92,7 +95,7 @@
     <div id="emptyState" class="card empty">
       <div class="empty-icon">📊</div>
       <h3>Tahlil natijasi shu yerda chiqadi</h3>
-      <p class="hint">Bir nechta timeframe skrinshotini yuklang (masalan 1D, 4H, 1H, 15m), strategiyalarni tanlang va "Tahlil qilish" ni bosing.</p>
+      <p class="hint">Savdo turini va strategiyalarni tanlang, keyin "Tahlil qilish" ni bosing — grafiklarni sayt o'zi oladi.</p>
     </div>
     <section id="resultCard" class="card hidden">
       <h2><i>4</i> Natija</h2>

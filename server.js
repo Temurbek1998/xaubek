@@ -600,7 +600,7 @@ app.post("/api/analyze", async (req, res) => {
         ? `Rasm ${i + 1} — timeframe: ${img.timeframe} — JONLI MA'LUMOT (Twelve Data, sayt chizgan grafik).\n` +
           `Narx shkalasi: y = ${sc.top.toFixed(4)} da ${sc.max}, y = ${sc.bottom.toFixed(4)} da ${sc.min} (chiziqli). ` +
           `Shamlar: ${sc.count} ta, birinchisining markazi x = ${sc.left.toFixed(4)}, oxirgisiniki x = ${sc.right.toFixed(4)} (teng oraliqda). ` +
-          `Oxirgi sham — eng yangi narx. OHLC (UTC vaqt, open, high, low, close):\n${String(img.ohlc || "").slice(0, 9000)}`
+          `Oxirgi sham — eng yangi narx. OHLC (UTC vaqt, open, high, low, close):\n${String(img.ohlc || "").slice(-9000)}`
         : `Rasm ${i + 1} — timeframe: ${img.timeframe || "noma'lum"}`,
     });
     content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });

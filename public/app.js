@@ -1,5 +1,8 @@
 const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1H", "4H", "1D", "1W", "1M"];
 const images = []; // { mediaType, data, url, timeframe }
+let hasLiveData = false;
+// With live data connected no screenshot is needed: the analyze button fetches the charts itself.
+const canAnalyze = () => images.length > 0 || hasLiveData;
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -25,6 +28,9 @@ api("/api/status").then((r) => r.json()).then((st) => {
   $("serverStatus").innerHTML = st.hasKey
     ? `<span class="dot ok"></span> Claude API ulangan · model: <b>${esc(st.model)}</b>`
     : `<span class="dot bad"></span> Serverda <b>ANTHROPIC_API_KEY</b> o'rnatilmagan (Render → Environment)`;
+  hasLiveData = Boolean(st.hasData);
+  $("analyze").disabled = !canAnalyze();
+  $("liveInfo").classList.toggle("hidden", !hasLiveData);
   $("serverStatus").innerHTML += st.hasData
     ? `<br><span class="dot ok"></span> Jonli ma'lumot (Twelve Data) ulangan`
     : `<br><span class="dot bad"></span> Jonli ma'lumot uchun <b>TWELVEDATA_API_KEY</b> kerak (Render → Environment)`;
@@ -66,7 +72,7 @@ function render() {
     </div>`).join("");
   $("thumbs").querySelectorAll(".del").forEach((b) => (b.onclick = () => { images.splice(+b.dataset.i, 1); render(); }));
   $("thumbs").querySelectorAll("select").forEach((s) => (s.onchange = () => (images[+s.dataset.i].timeframe = s.value)));
-  $("analyze").disabled = images.length === 0;
+  $("analyze").disabled = !canAnalyze();
 }
 
 // ---- Live data: the site draws XAU/USD candles itself, so it knows the exact price of every pixel.
@@ -129,7 +135,7 @@ function renderLiveChart(tf, candles) {
   return {
     mediaType: "image/png", data: url.split(",")[1], url, timeframe: tf, live: true,
     scale: { top: pTop / h, bottom: pBot / h, max, min, left: xOf(0) / w, right: xOf(candles.length - 1) / w, count: candles.length },
-    ohlc: candles.map((c) => `${c.t},${c.o},${c.h},${c.l},${c.c}`).join("\n"),
+    ohlc: candles.map((c) => `${c.t.slice(0, 16)},${c.o.toFixed(2)},${c.h.toFixed(2)},${c.l.toFixed(2)},${c.c.toFixed(2)}`).join("\n"),
   };
 }
 
@@ -225,7 +231,7 @@ $("analyze").onclick = async () => {
   const strategies = selectedStrategies();
   if (strategies.length === 0) return alertMsg("Kamida bitta strategiyani tanlang.");
   // Live charts are re-fetched right before the analysis so Claude always sees the latest candles.
-  if (images.some((i) => i.live) && !(await loadLiveCharts())) return;
+  if ((images.length === 0 || images.some((i) => i.live)) && !(await loadLiveCharts())) return;
   // Send higher timeframes first so Claude reads them top-down.
   const sorted = [...images].sort((a, b) => TIMEFRAMES.indexOf(b.timeframe) - TIMEFRAMES.indexOf(a.timeframe));
   const useNews = $("useNews").checked;
@@ -250,7 +256,7 @@ $("analyze").onclick = async () => {
     pollJob();
   } catch (err) {
     alertMsg(err.message);
-    $("analyze").disabled = images.length === 0;
+    $("analyze").disabled = !canAnalyze();
   }
 };
 
@@ -267,7 +273,7 @@ async function pollJob(quietIfMissing = false) {
     if (res.status === 404) {
       try { localStorage.removeItem(JOB_KEY); } catch {}
       if (!quietIfMissing) alertMsg(body.error);
-      $("analyze").disabled = images.length === 0;
+      $("analyze").disabled = !canAnalyze();
       return;
     }
     if (!res.ok) throw new Error(body.error || `Xato ${res.status}`);
@@ -285,7 +291,7 @@ async function pollJob(quietIfMissing = false) {
     pollTimer = setTimeout(pollJob, 4000);
     return;
   }
-  $("analyze").disabled = images.length === 0;
+  $("analyze").disabled = !canAnalyze();
   if (body.status === "error") {
     try { localStorage.removeItem(JOB_KEY); } catch {}
     return alertMsg(body.error);

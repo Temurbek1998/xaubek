@@ -235,3 +235,6 @@ body { transition: background .2s, color .2s; }
 .live-btn:disabled { opacity: .6; cursor: wait; }
 .live-tag { position: absolute; top: 6px; left: 6px; background: #089981; color: #fff; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; }
 .live-tf { border-top: 1px solid var(--line); padding: 7px 10px; font-weight: 700; font-size: 13px; }
+.live-info { border: 1px solid #089981; background: color-mix(in srgb, #089981 12%, transparent); border-radius: 12px; padding: 10px 12px; font-size: 14px; line-height: 1.45; }
+.own-shots { margin-top: 12px; }
+.own-shots summary { cursor: pointer; color: var(--muted, #8b949e); font-size: 13px; margin-bottom: 10px; }

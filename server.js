@@ -65,8 +65,15 @@ app.post("/api/logout", (req, res) => {
 app.get("/healthz", (req, res) => res.send("ok"));
 
 const PUBLIC_PATHS = new Set(["/login.html", "/style.css"]);
+// MetaTrader 5 script authenticates with its own key (shown in the admin panel), not the browser cookie.
+const MT5_TOKEN = sign("mt5-script").slice(0, 32);
+const isMt5 = (req) => {
+  const given = Buffer.from(String(req.get("X-Token") || "")), expected = Buffer.from(MT5_TOKEN);
+  return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+};
 app.use((req, res, next) => {
   if (PUBLIC_PATHS.has(req.path) || isAdmin(req)) return next();
+  if (req.path.startsWith("/api/mt5/")) return isMt5(req) ? next() : res.status(401).type("text").send("ERROR|MT5 kaliti noto'g'ri. Saytdagi Sozlamalar bo'limidan nusxalang.");
   if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Avval admin panelga kiring." });
   res.redirect("/login.html");
 });
@@ -75,7 +82,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const TWELVEDATA_KEY = process.env.TWELVEDATA_API_KEY || "";
 app.get("/api/status", (req, res) => {
-  res.json({ hasKey: Boolean(API_KEY), hasData: Boolean(TWELVEDATA_KEY), model: MODEL, protected: Boolean(ADMIN_PASSWORD) });
+  res.json({ hasKey: Boolean(API_KEY), hasData: Boolean(TWELVEDATA_KEY), model: MODEL, protected: Boolean(ADMIN_PASSWORD), mt5Token: MT5_TOKEN });
 });
 
 // Live XAU/USD candles from Twelve Data. Fetched only when the user asks (no background polling).
@@ -630,6 +637,21 @@ function normalizeAnalysis(a) {
   };
 }
 
+// The task text shared by the site and the MT5 script: current time, trading style and every chosen strategy with its rules.
+function instructionText(chosen, styleText, note) {
+  return (
+      `Hozirgi vaqt (UTC): ${new Date().toISOString().slice(0, 16).replace("T", " ")}.\n` +
+      "Yuqoridagi XAU/USD grafiklarini tahlil qil va qaysi timeframe'da savdoga kirishni tavsiya qil.\n\n" +
+      `TREYDERNING SAVDO TURI: ${styleText}\n` +
+      "Barcha strategiyalarni AYNAN shu savdo turi uchun qo'lla: timeframe'lar, kirish nuqtasi, SL/TP masofasi va R:R shu turga mos bo'lsin. " +
+      "Yakuniy tavsiya etilgan timeframe ham shu turga mos bo'lsin. Strategiya shu savdo turiga yaxshi mos kelmasa (masalan, Wyckoff skalpingda), " +
+      "buni reasoning'da ayt va ballni pasaytir. Agar yuklangan rasmlar shu savdo turi uchun yetarli bo'lmasa (masalan, skalping uchun 5m/15m yo'q), freshness_warning emas, risks ga yoz.\n\n" +
+      "Quyidagi strategiyalarning har birini alohida sinab ko'r:\n" +
+      chosen.map((k, i) => `${i + 1}. ${STRATEGIES[k].label}\n` + STRATEGIES[k].rules.map((r) => `   - ${r}`).join("\n")).join("\n") +
+      (note ? `\n\nTreyderning izohi: ${note}` : "")
+  );
+}
+
 app.post("/api/analyze", async (req, res) => {
   const apiKey = API_KEY;
   if (!apiKey) {
@@ -668,19 +690,7 @@ app.post("/api/analyze", async (req, res) => {
     });
     content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
   }
-  content.push({
-    type: "text",
-    text:
-      `Hozirgi vaqt (UTC): ${new Date().toISOString().slice(0, 16).replace("T", " ")}.\n` +
-      "Yuqoridagi XAU/USD grafiklarini tahlil qil va qaysi timeframe'da savdoga kirishni tavsiya qil.\n\n" +
-      `TREYDERNING SAVDO TURI: ${styleText}\n` +
-      "Barcha strategiyalarni AYNAN shu savdo turi uchun qo'lla: timeframe'lar, kirish nuqtasi, SL/TP masofasi va R:R shu turga mos bo'lsin. " +
-      "Yakuniy tavsiya etilgan timeframe ham shu turga mos bo'lsin. Strategiya shu savdo turiga yaxshi mos kelmasa (masalan, Wyckoff skalpingda), " +
-      "buni reasoning'da ayt va ballni pasaytir. Agar yuklangan rasmlar shu savdo turi uchun yetarli bo'lmasa (masalan, skalping uchun 5m/15m yo'q), freshness_warning emas, risks ga yoz.\n\n" +
-      "Quyidagi strategiyalarning har birini alohida sinab ko'r:\n" +
-      chosen.map((k, i) => `${i + 1}. ${STRATEGIES[k].label}\n` + STRATEGIES[k].rules.map((r) => `   - ${r}`).join("\n")).join("\n") +
-      (note ? `\n\nTreyderning izohi: ${note}` : ""),
-  });
+  content.push({ type: "text", text: instructionText(chosen, styleText, note) });
 
   // Runs in the background so the analysis survives the browser tab going to sleep; the page polls /api/jobs/:id.
   const job = createJob(images.map(({ ohlc, ...rest }) => rest));
@@ -693,6 +703,105 @@ app.post("/api/analyze", async (req, res) => {
     .then((result) => { snapToPrices(result.analysis, job.images); Object.assign(job, { status: "done", result }); })
     .catch((err) => Object.assign(job, { status: "error", error: analysisErrorMessage(err) }))
     .finally(() => { job.finishedAt = Date.now(); });
+});
+
+// ---- MetaTrader 5: the script sends the broker's own candles, gets the plan back as simple text lines and draws it on the chart.
+const MT5_TFS = ["1m", "5m", "15m", "30m", "1H", "4H", "1D", "1W"];
+
+app.post("/api/mt5/analyze", (req, res) => {
+  if (!API_KEY) return res.status(500).type("text").send("ERROR|Serverda ANTHROPIC_API_KEY o'rnatilmagan.");
+  const { symbol, style, note, useNews, frames, serverTime } = req.body || {};
+  const styleText = TRADING_STYLES[style] || TRADING_STYLES.intraday;
+  const list = (Array.isArray(frames) ? frames : [])
+    .filter((f) => MT5_TFS.includes(f?.timeframe) && Array.isArray(f.candles))
+    .slice(0, 6)
+    .map((f) => ({
+      timeframe: f.timeframe,
+      candles: f.candles.slice(-300).map((c) => c.map(Number)).filter((c) => c.length >= 5 && c.every(Number.isFinite)),
+    }))
+    .filter((f) => f.candles.length > 10);
+  if (!list.length) return res.status(400).type("text").send("ERROR|Shamlar yuborilmadi.");
+
+  const brokerTime = (t) => new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ");
+  const content = list.map((f, i) => ({
+    type: "text",
+    text: `Rasm ${i + 1} — timeframe: ${f.timeframe} — METATRADER 5 (broker simvoli: ${String(symbol || "XAUUSD").slice(0, 20)}). ` +
+      `Bu rasm emas, faqat brokerning aniq narxlari. ${f.candles.length} ta sham; x koordinata = sham tartib raqami / ${f.candles.length - 1} ` +
+      `(x=0 birinchi sham, x=1 oxirgi sham). y koordinatalar ishlatilmaydi — chizmalarda price1/price2 ni ALBATTA aniq narx bilan to'ldir.\n` +
+      `OHLC (broker server vaqti, open, high, low, close):\n` +
+      f.candles.map((c) => `${brokerTime(c[0])},${c[1]},${c[2]},${c[3]},${c[4]}`).join("\n"),
+  }));
+  content.push({
+    type: "text",
+    text: instructionText(Object.keys(STRATEGIES), styleText, String(note || "").slice(0, 500)) +
+      (Number.isFinite(+serverTime) && +serverTime > 0 ? `\n\nBroker server vaqti hozir: ${brokerTime(+serverTime)} (yuqoridagi sham vaqtlari shu vaqtda).` : "") +
+      "\n\nMa'lumot MetaTrader'dan keldi: freshness_warning ni faqat oxirgi sham broker vaqtidan ancha eski bo'lsa yoz. position y qiymatlarini 0 qoldirishing mumkin, narxlar muhim.",
+  });
+
+  const job = createJob([]);
+  job.mt5 = list.map((f) => ({ timeframe: f.timeframe, times: f.candles.map((c) => c[0]) }));
+  res.status(202).type("text").send(`JOB|${job.id}`);
+  (async () => {
+    if (TWELVEDATA_KEY) content.push({ type: "text", text: await macroText(style) });
+    return runAnalysis(content, useNews !== false && useNews !== "false");
+  })()
+    .then((result) => Object.assign(job, { status: "done", result }))
+    .catch((err) => Object.assign(job, { status: "error", error: analysisErrorMessage(err) }))
+    .finally(() => { job.finishedAt = Date.now(); });
+});
+
+// One item per line, fields split by "|": easy to parse in MQL5 without a JSON library.
+function mt5Lines(a, frames) {
+  const clean = (v) => String(v ?? "").replace(/[|\r\n]+/g, " ").trim();
+  const p = (v) => (+v || 0).toFixed(2);
+  const frame = (idx) => frames[idx - 1] || frames[0];
+  const timeAt = (idx, x) => {
+    const { times } = frame(idx);
+    const n = times.length, step = n > 1 ? times[n - 1] - times[n - 2] : 60;
+    const k = Math.round((+x || 0) * (n - 1));
+    return k <= 0 ? times[0] : k < n ? times[k] : times[n - 1] + (k - n + 1) * step;
+  };
+  const tp = a.trade_plan;
+  const out = [
+    "OK",
+    `DIR|${tp.direction}`,
+    `PLAN|${p(tp.entry_price)}|${p(tp.stop_loss_price)}|${p(tp.take_profit_1_price)}|${p(tp.take_profit_2_price)}`,
+    `TF|${clean(a.recommended_entry_timeframe)}`,
+    `CONF|${clean(a.confidence)}`,
+    `BIAS|${clean(a.overall_bias)}`,
+    `BEST|${clean(a.best_strategy)}`,
+    `RR|${clean(tp.risk_reward)}`,
+  ];
+  const f = tp.forecast || {};
+  if (f.invalidation_price > 0) out.push(`INV|${p(f.invalidation_price)}|${clean(f.invalidation_text)}`);
+  for (const d of a.drawings || []) {
+    if (!(d.price1 > 0)) continue;
+    const t1 = timeAt(d.image_index, Math.min(d.x1, d.x2)), t2 = timeAt(d.image_index, Math.max(d.x1, d.x2, 1));
+    if (d.kind === "zone" && d.price2 > 0) out.push(`ZONE|${t1}|${t2}|${p(d.price1)}|${p(d.price2)}|${d.color}|${clean(d.label)}`);
+    else if (d.kind === "arrow" && d.price2 > 0) out.push(`ARROW|${timeAt(d.image_index, d.x1)}|${p(d.price1)}|${timeAt(d.image_index, d.x2)}|${p(d.price2)}|${d.color}|${clean(d.label)}`);
+    else out.push(`LINE|${p(d.price1)}|${d.color}|${clean(d.label)}`);
+  }
+  // Forecast path on the entry timeframe: starts at the last candle, then one point per bars_ahead.
+  const entryTf = a.recommended_entry_timeframe;
+  const fr = frames.find((x) => x.timeframe.toLowerCase() === String(entryTf).toLowerCase()) || frame(tp.position?.image_index);
+  const n = fr.times.length, step = n > 1 ? fr.times[n - 1] - fr.times[n - 2] : 60, last = fr.times[n - 1];
+  out.push(`PERIOD|${step}`);
+  for (const [name, path] of [["MAIN", f.main_path], ["ALT", f.alt_path]]) {
+    for (const pt of path || []) out.push(`PATH|${name}|${last + pt.bars_ahead * step}|${p(pt.price)}`);
+  }
+  if (f.main_label) out.push(`LABEL|MAIN|${clean(f.main_label)}`);
+  if (f.alt_label) out.push(`LABEL|ALT|${clean(f.alt_label)}`);
+  out.push(`NOTE|${clean(a.summary).slice(0, 400)}`);
+  return out.join("\n");
+}
+
+app.get("/api/mt5/jobs/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+  res.type("text");
+  if (!job || !job.mt5) return res.status(404).send("ERROR|Tahlil topilmadi (server qayta ishga tushgan bo'lishi mumkin). Skriptni qayta ishga tushiring.");
+  if (job.status === "running") return res.send(`RUNNING|${Math.round((Date.now() - job.startedAt) / 1000)}`);
+  if (job.status === "error") return res.send(`ERROR|${String(job.error).replace(/[\r\n|]+/g, " ")}`);
+  res.send(mt5Lines(job.result.analysis, job.mt5));
 });
 
 app.get("/api/jobs/:id", (req, res) => {

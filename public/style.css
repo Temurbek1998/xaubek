@@ -238,3 +238,10 @@ body { transition: background .2s, color .2s; }
 .live-info { border: 1px solid #089981; background: color-mix(in srgb, #089981 12%, transparent); border-radius: 12px; padding: 10px 12px; font-size: 14px; line-height: 1.45; }
 .own-shots { margin-top: 12px; }
 .own-shots summary { cursor: pointer; color: var(--muted, #8b949e); font-size: 13px; margin-bottom: 10px; }
+.mt5-box { margin: 12px 0; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.mt5-box summary { cursor: pointer; font-weight: 700; }
+.mt5-key { display: flex; gap: 8px; }
+.mt5-key input { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.mt5-dl { display: block; text-align: center; text-decoration: none; }
+.mt5-steps { padding-left: 18px; margin: 10px 0 0; }
+.mt5-steps li { margin-bottom: 6px; }

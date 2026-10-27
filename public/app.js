@@ -32,10 +32,17 @@ api("/api/status").then((r) => r.json()).then((st) => {
   $("serverStatus").innerHTML = problems.join("<br>");
   $("serverStatus").classList.toggle("hidden", !problems.length);
   hasLiveData = Boolean(st.hasData);
+  if (st.mt5Token) $("mt5Token").value = st.mt5Token;
   $("analyze").disabled = !canAnalyze();
   $("liveInfo").classList.toggle("hidden", !hasLiveData);
   $("logout").classList.toggle("hidden", !st.protected);
 }).catch(() => {});
+$("mt5Copy").onclick = () => {
+  $("mt5Token").select();
+  navigator.clipboard?.writeText($("mt5Token").value).catch(() => document.execCommand("copy"));
+  $("mt5Copy").textContent = "Nusxalandi ✓";
+  setTimeout(() => ($("mt5Copy").textContent = "Nusxalash"), 1500);
+};
 $("logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login.html"; };
 
 // Guess the timeframe from the file name (e.g. "XAUUSD_4H.png") or pick the next unused one.

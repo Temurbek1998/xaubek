@@ -85,6 +85,20 @@
         <button data-s="swing"><b>🌊 Swing</b><small>1H–4H · bir necha kun</small></button>
         <button data-s="position"><b>🏔 Pozitsion</b><small>4H–1D · haftalar</small></button>
       </div>
+      <details class="mt5-box">
+        <summary>📈 MetaTrader 5 ga ulash</summary>
+        <p class="hint">Skript brokeringizning aniq narxlarini saytga yuboradi va tahlilni to'g'ridan-to'g'ri MT5 grafigiga chizadi (zonalar, Entry/SL/TP, bekor qilish, prognoz yo'li). Savdo ochmaydi.</p>
+        <label class="field-label">MT5 kaliti</label>
+        <div class="mt5-key"><input id="mt5Token" readonly value="..."><button id="mt5Copy" class="secondary">Nusxalash</button></div>
+        <a class="live-btn mt5-dl" href="mt5/XauBek.mq5" download="XauBek.mq5">⬇ XauBek.mq5 skriptini yuklab olish</a>
+        <ol class="hint mt5-steps">
+          <li>MT5 → <b>File → Open Data Folder</b> → <b>MQL5/Scripts</b> papkasiga XauBek.mq5 ni tashlang.</li>
+          <li>MT5 → <b>Tools → Options → Expert Advisors</b> → "Allow WebRequest for listed URL" ni yoqing va <b>https://xaubek.onrender.com</b> ni qo'shing.</li>
+          <li>Navigator → Scripts → XauBek ustida o'ng tugma → <b>Refresh</b> (yoki MetaEditor'da ochib <b>Compile</b>).</li>
+          <li>XAUUSD grafigini oching, XauBek'ni grafikka sudrang, <b>MT5 kaliti</b> ga yuqoridagi kalitni qo'ying, savdo turini tanlang → OK.</li>
+          <li>2–5 daqiqada tahlil grafikka chiziladi, chap yuqorida qisqa xulosa chiqadi.</li>
+        </ol>
+      </details>
       <textarea id="note" rows="2" placeholder="Izoh (ixtiyoriy): risk 1%, London sessiyasi, faqat BUY..."></textarea>
       <label class="check"><input id="useNews" type="checkbox" checked> Forex Factory yangiliklari va kalendari (FOMC, CPI, NFP...)</label>
       <button id="analyze" class="primary" disabled>⚡ Tahlil qilish</button>
